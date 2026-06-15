@@ -321,6 +321,25 @@ app/src/main/assets/yolov8n.tflite
 app/src/main/assets/yolo26s.tflite
 ```
 
+These `.tflite` files are intentionally **not committed to git**. They are
+distributed as GitHub Release assets so the source repo stays small and clean.
+
+Default release:
+
+```text
+models-v1
+```
+
+Release assets:
+
+```text
+yolo26n.tflite
+yolo11n.tflite
+yolov8n.tflite
+yolo26s.tflite
+SHA256SUMS.txt
+```
+
 The model can be switched from the phone-hosted web page. When switching model,
 the app automatically:
 
@@ -384,6 +403,33 @@ Debug APK output:
 
 ```text
 app/build/outputs/apk/debug/app-debug.apk
+```
+
+## Setup After Clone
+
+Fresh clones do not include model binaries. Run this once before installing the
+app if you need YOLO detection:
+
+```bash
+bash tools/download_models.sh
+```
+
+The script downloads model files from the GitHub Release `models-v1` into:
+
+```text
+app/src/main/assets/
+```
+
+Then build the app:
+
+```bash
+./gradlew :app:assembleDebug
+```
+
+If this repo is forked or moved, override the release source:
+
+```bash
+REPO=owner/repo TAG=models-v1 bash tools/download_models.sh
 ```
 
 ## Model Export

@@ -1,0 +1,31 @@
+.gradle/
+build/
+*/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+.kotlin/
+
+# Local Python/export environments. Never commit these.
+.venv/
+.venv*/
+venv/
+__pycache__/
+*.pyc
+
+# Model binaries and export artifacts are intentionally local until the team
+# decides to use Git LFS or a release artifact store.
+app/src/main/assets/*.tflite
+tools/*.pt
+tools/*.onnx
+tools/*_saved_model/
+*.pt
+*.onnx
+*_saved_model/
+calibration_image_sample_data_*.npy
+calibration_image_sample_data_*.zip
+
+# Generated APKs and Android build reports.
+*.apk
+*.aab
