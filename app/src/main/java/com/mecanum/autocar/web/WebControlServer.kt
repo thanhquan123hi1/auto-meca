@@ -1,16 +1,23 @@
 package com.mecanum.autocar.web
 
+import android.content.Context
+import android.graphics.Bitmap
 import android.util.Log
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.PrintWriter
+import com.mecanum.autocar.ai.VisionResult
+import com.mecanum.autocar.control.StationController
+import fi.iki.elonen.NanoHTTPD
+import fi.iki.elonen.NanoWSD
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.Inet4Address
 import java.net.NetworkInterface
-import java.net.ServerSocket
-import java.net.Socket
 import java.util.Locale
-import java.util.concurrent.Executors
+import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.atomic.AtomicInteger
 
+/**
+ * Trang thai gui ra dashboard. Tat ca cac truong duoc serialize sang JSON UTF-8.
+ */
 data class StationStatus(
     val autonomous: Boolean,
     val command: Char,
@@ -20,162 +27,301 @@ data class StationStatus(
     val modelOptions: List<Pair<String, String>>,
     val aiFps: Float,
     val udpError: String,
+    val markerDistanceCm: Float?,
+    val markerId: Int?,
+    val detectionCount: Int,
+    val connectedWifiSsid: String,
 )
 
+/**
+ * May chu tich hop trong app: phuc vu dashboard HTML, REST dieu khien va WebSocket /ws.
+ * - HTTP: GET /, GET /status.json, POST /api/...
+ * - WebSocket /ws: nhan lenh tay (giu/nha), gui status realtime va khung JPEG.
+ *
+ * Uu tien tai nguyen cho AI/dieu khien: chi sao chep va ma hoa JPEG khi co client xem.
+ */
 class WebControlServer(
+    private val context: Context,
     private val port: Int = 8088,
+    private val controller: StationController,
     private val statusProvider: () -> StationStatus,
-    private val onStart: () -> Unit,
-    private val onStop: () -> Unit,
+    private val onAutoOn: () -> Unit,
+    private val onAutoOff: () -> Unit,
+    private val onStopVehicle: () -> Unit,
     private val onModelSelect: (String) -> Unit,
-) {
-    @Volatile private var running = false
-    private val executor = Executors.newSingleThreadExecutor()
-    private var serverSocket: ServerSocket? = null
+    private val targetStreamFps: Int = 12,
+    private val jpegQuality: Int = 70,
+    private val maxClients: Int = 4,
+) : NanoWSD(port) {
+
+    private val clients = CopyOnWriteArraySet<DashboardSocket>()
+    private val clientIds = AtomicInteger(0)
+
+    // Khung moi nhat (chi giu khi co client). Truy cap duoi khoa frameLock.
+    private val frameLock = Any()
+    private var latestRaw: Bitmap? = null
+    private var latestResult: VisionResult? = null
+    private var frameDirty = false
+
+    @Volatile private var streaming = false
+    private var streamThread: Thread? = null
+    private var statusThread: Thread? = null
 
     val url: String
         get() = "http://${localIpv4Address() ?: "0.0.0.0"}:$port"
 
-    fun start() {
-        if (running) return
-        running = true
-        executor.execute(::serveLoop)
+    fun startServer() {
+        if (streaming) return
+        streaming = true
+        start(SOCKET_READ_TIMEOUT, false)
+        streamThread = Thread(::streamLoop, "web-stream").also { it.isDaemon = true; it.start() }
+        statusThread = Thread(::statusLoop, "web-status").also { it.isDaemon = true; it.start() }
     }
 
-    fun stop() {
-        running = false
+    fun stopServer() {
+        streaming = false
         try {
-            serverSocket?.close()
+            stop()
         } catch (_: Exception) {
         }
-        executor.shutdownNow()
+        clients.clear()
+        synchronized(frameLock) {
+            latestRaw?.recycle()
+            latestRaw = null
+            latestResult = null
+            frameDirty = false
+        }
     }
 
-    private fun serveLoop() {
-        try {
-            ServerSocket(port).use { server ->
-                serverSocket = server
-                while (running) {
-                    val client = server.accept()
-                    handleClient(client)
+    /** Co client nao dang xem stream khong. */
+    private fun hasViewers(): Boolean = clients.isNotEmpty()
+
+    /**
+     * MainActivity goi moi khung sau khi xu ly AI. Chi sao chep khi co nguoi xem
+     * de khong lam cham pipeline AI. Bitmap nguon van thuoc ve nguoi goi.
+     */
+    fun submitFrame(bitmap: Bitmap, result: VisionResult) {
+        if (!streaming || !hasViewers()) return
+        val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return
+        synchronized(frameLock) {
+            latestRaw?.recycle()
+            latestRaw = copy
+            latestResult = result
+            frameDirty = true
+        }
+    }
+
+    override fun openWebSocket(handshake: IHTTPSession): WebSocket {
+        return DashboardSocket(handshake)
+    }
+
+    override fun serveHttp(session: IHTTPSession): Response {
+        val uri = session.uri ?: "/"
+        return try {
+            when {
+                uri == "/" || uri == "/index.html" -> serveDashboard()
+                uri == "/status.json" -> jsonResponse(buildStatusJson(statusProvider()))
+                uri.startsWith("/api/auto/on") -> { onAutoOn(); okResponse() }
+                uri.startsWith("/api/auto/off") -> { onAutoOff(); okResponse() }
+                uri.startsWith("/api/stop") -> { onStopVehicle(); okResponse() }
+                uri.startsWith("/api/model") -> {
+                    val id = session.parameters["id"]?.firstOrNull().orEmpty()
+                    if (id.isNotBlank()) onModelSelect(id)
+                    okResponse()
                 }
+                else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "404")
             }
         } catch (error: Exception) {
-            if (running) Log.w(TAG, "Web server failed", error)
+            Log.w(TAG, "serveHttp error", error)
+            newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "error")
         }
     }
 
-    private fun handleClient(socket: Socket) {
-        socket.use { client ->
-            val reader = BufferedReader(InputStreamReader(client.getInputStream()))
-            val requestLine = reader.readLine() ?: return
-            val path = requestLine.split(" ").getOrNull(1) ?: "/"
-            when {
-                path.startsWith("/start") -> {
-                    onStart()
-                    respondRedirect(client)
+    private fun serveDashboard(): Response {
+        val html = context.assets.open("dashboard.html").bufferedReader(Charsets.UTF_8).use { it.readText() }
+        val response = newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html)
+        return response
+    }
+
+    private fun okResponse(): Response =
+        jsonResponse("{\"ok\":true}")
+
+    private fun jsonResponse(json: String): Response {
+        val response = newFixedLengthResponse(Response.Status.OK, "application/json; charset=utf-8", json)
+        response.addHeader("Cache-Control", "no-store")
+        return response
+    }
+
+    private fun streamLoop() {
+        val frameIntervalMs = (1000L / targetStreamFps.coerceIn(1, 30)).coerceAtLeast(1L)
+        while (streaming) {
+            val start = System.currentTimeMillis()
+            try {
+                broadcastFrame()
+            } catch (error: Exception) {
+                Log.w(TAG, "stream error", error)
+            }
+            val elapsed = System.currentTimeMillis() - start
+            val sleep = frameIntervalMs - elapsed
+            if (sleep > 0) Thread.sleep(sleep)
+        }
+    }
+
+    private fun broadcastFrame() {
+        if (!hasViewers()) return
+        val raw: Bitmap
+        val result: VisionResult?
+        synchronized(frameLock) {
+            if (!frameDirty || latestRaw == null) return
+            raw = latestRaw!!.copy(Bitmap.Config.ARGB_8888, false) ?: return
+            result = latestResult
+            frameDirty = false
+        }
+
+        // Nhom client theo che do overlay de ma hoa nhieu nhat 2 lan moi khung.
+        val wantOverlay = clients.any { it.overlayEnabled }
+        val wantPlain = clients.any { !it.overlayEnabled }
+
+        var overlayJpeg: ByteArray? = null
+        var plainJpeg: ByteArray? = null
+        if (wantOverlay) {
+            val rendered = FrameOverlayRenderer.render(raw, result)
+            overlayJpeg = encodeJpeg(rendered)
+            rendered.recycle()
+        }
+        if (wantPlain) {
+            plainJpeg = encodeJpeg(raw)
+        }
+        raw.recycle()
+
+        for (client in clients) {
+            val payload = if (client.overlayEnabled) overlayJpeg else plainJpeg
+            if (payload != null) client.sendFrame(payload)
+        }
+    }
+
+    private fun encodeJpeg(bitmap: Bitmap): ByteArray {
+        val out = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
+        return out.toByteArray()
+    }
+
+    private fun statusLoop() {
+        while (streaming) {
+            try {
+                if (hasViewers()) {
+                    val json = "{\"type\":\"status\",\"payload\":" + buildStatusJson(statusProvider()) + "}"
+                    for (client in clients) client.sendText(json)
                 }
-                path.startsWith("/stop") -> {
-                    onStop()
-                    respondRedirect(client)
+            } catch (error: Exception) {
+                Log.w(TAG, "status error", error)
+            }
+            Thread.sleep(200L)
+        }
+    }
+
+    private fun buildStatusJson(s: StationStatus): String {
+        val sb = StringBuilder()
+        sb.append("{")
+        sb.append("\"autonomous\":").append(s.autonomous).append(",")
+        sb.append("\"command\":\"").append(s.command).append("\",")
+        sb.append("\"reason\":\"").append(jsonEscape(s.reason)).append("\",")
+        sb.append("\"modelId\":\"").append(jsonEscape(s.modelId)).append("\",")
+        sb.append("\"modelName\":\"").append(jsonEscape(s.modelName)).append("\",")
+        sb.append("\"aiFps\":").append(String.format(Locale.US, "%.1f", s.aiFps)).append(",")
+        sb.append("\"udpError\":\"").append(jsonEscape(s.udpError)).append("\",")
+        sb.append("\"markerId\":").append(s.markerId?.toString() ?: "null").append(",")
+        sb.append("\"markerDistanceCm\":").append(s.markerDistanceCm?.let { String.format(Locale.US, "%.1f", it) } ?: "null").append(",")
+        sb.append("\"detectionCount\":").append(s.detectionCount).append(",")
+        sb.append("\"connectedWifiSsid\":\"").append(jsonEscape(s.connectedWifiSsid)).append("\",")
+        sb.append("\"modelOptions\":[")
+        s.modelOptions.forEachIndexed { index, (id, name) ->
+            if (index > 0) sb.append(",")
+            sb.append("[\"").append(jsonEscape(id)).append("\",\"").append(jsonEscape(name)).append("\"]")
+        }
+        sb.append("]}")
+        return sb.toString()
+    }
+
+    inner class DashboardSocket(handshake: IHTTPSession) : WebSocket(handshake) {
+        val id: String = "client-${clientIds.incrementAndGet()}"
+        @Volatile var overlayEnabled: Boolean = true
+
+        override fun onOpen() {
+            if (clients.size >= maxClients) {
+                try {
+                    close(WebSocketFrame.CloseCode.PolicyViolation, "Qua nhieu client", false)
+                } catch (_: IOException) {
                 }
-                path.startsWith("/model") -> {
-                    val modelId = path.substringAfter("id=", "").substringBefore("&")
-                    if (modelId.isNotBlank()) onModelSelect(modelId)
-                    respondRedirect(client)
-                }
-                path.startsWith("/status.json") -> respondJson(client)
-                else -> respondHtml(client)
+                return
+            }
+            clients.add(this)
+            try {
+                sendText("{\"type\":\"status\",\"payload\":" + buildStatusJson(statusProvider()) + "}")
+            } catch (_: Exception) {
+            }
+        }
+
+        override fun onClose(code: WebSocketFrame.CloseCode?, reason: String?, initiatedByRemote: Boolean) {
+            clients.remove(this)
+            controller.releaseManual(id)
+        }
+
+        override fun onMessage(message: WebSocketFrame) {
+            val text = message.textPayload ?: return
+            handleClientMessage(this, text)
+        }
+
+        override fun onPong(pong: WebSocketFrame) {}
+
+        override fun onException(exception: IOException) {
+            Log.w(TAG, "ws exception", exception)
+        }
+
+        fun sendFrame(bytes: ByteArray) {
+            try {
+                send(bytes)
+            } catch (_: Exception) {
+                clients.remove(this)
+            }
+        }
+
+        fun sendText(text: String) {
+            try {
+                send(text)
+            } catch (_: Exception) {
+                clients.remove(this)
             }
         }
     }
 
-    private fun respondRedirect(socket: Socket) {
-        PrintWriter(socket.getOutputStream()).use { out ->
-            out.print("HTTP/1.1 303 See Other\r\n")
-            out.print("Location: /\r\n")
-            out.print("Connection: close\r\n\r\n")
+    private fun handleClientMessage(socket: DashboardSocket, text: String) {
+        val type = extractJsonString(text, "type") ?: return
+        when (type) {
+            "manual_press" -> {
+                val command = extractJsonString(text, "command")?.firstOrNull() ?: return
+                controller.pressManual(command, socket.id, System.currentTimeMillis())
+            }
+            "manual_release" -> controller.releaseManual(socket.id)
+            "overlay" -> {
+                socket.overlayEnabled = text.contains("\"enabled\":true")
+            }
         }
     }
 
-    private fun respondJson(socket: Socket) {
-        val status = statusProvider()
-        val body = """
-            {"autonomous":${status.autonomous},"command":"${status.command}","reason":"${jsonEscape(status.reason)}","model":"${jsonEscape(status.modelId)}","aiFps":${String.format(Locale.US, "%.1f", status.aiFps)},"udpError":"${jsonEscape(status.udpError)}"}
-        """.trimIndent()
-        respond(socket, "application/json; charset=utf-8", body)
+    private fun extractJsonString(json: String, key: String): String? {
+        val marker = "\"$key\""
+        val keyIndex = json.indexOf(marker)
+        if (keyIndex < 0) return null
+        val colon = json.indexOf(':', keyIndex + marker.length)
+        if (colon < 0) return null
+        var i = colon + 1
+        while (i < json.length && json[i].isWhitespace()) i++
+        if (i >= json.length || json[i] != '"') return null
+        val end = json.indexOf('"', i + 1)
+        if (end < 0) return null
+        return json.substring(i + 1, end)
     }
-
-    private fun respondHtml(socket: Socket) {
-        val status = statusProvider()
-        val state = if (status.autonomous) "ĐANG CHẠY" else "ĐANG DỪNG"
-        val body = """
-            <!doctype html>
-            <html lang="vi">
-            <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width, initial-scale=1">
-              <meta http-equiv="refresh" content="1">
-              <title>Mecanum Vision Station</title>
-              <style>
-                body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;background:#0b1014;color:#edf7f4}
-                main{max-width:720px;margin:40px auto;padding:0 20px}
-                .panel{background:#151d23;border:1px solid #29343c;border-radius:8px;padding:20px}
-                h1{font-size:24px;margin:0 0 16px}
-                .grid{display:grid;grid-template-columns:160px 1fr;gap:8px 16px;margin:18px 0}
-                a{display:inline-block;text-decoration:none;color:#06100d;background:#57d99a;padding:12px 18px;border-radius:6px;font-weight:700;margin-right:10px}
-                a.stop{background:#ff6b6b;color:#170606}
-                a.model{background:#26323a;color:#edf7f4;border:1px solid #40515c;margin-top:8px}
-                a.model.active{background:#8ee6bd;color:#06100d;border-color:#8ee6bd}
-                code{background:#0b1014;padding:2px 6px;border-radius:4px}
-              </style>
-            </head>
-            <body>
-              <main>
-                <section class="panel">
-                  <h1>Mecanum Vision Station</h1>
-                  <div class="grid">
-                    <div>Trạng thái</div><strong>$state</strong>
-                    <div>Model</div><code>${htmlEscape(status.modelName)}</code>
-                    <div>Lệnh hiện tại</div><code>${status.command}</code>
-                    <div>Lý do</div><code>${htmlEscape(status.reason)}</code>
-                    <div>AI FPS</div><code>${String.format(Locale.US, "%.1f", status.aiFps)}</code>
-                    <div>UDP lỗi</div><code>${htmlEscape(status.udpError).ifBlank { "không" }}</code>
-                  </div>
-                  <a href="/start">Start Autonomous</a>
-                  <a class="stop" href="/stop">Stop</a>
-                  <h2 style="font-size:18px;margin:24px 0 8px">Model</h2>
-                  ${modelButtons(status)}
-                </section>
-              </main>
-            </body>
-            </html>
-        """.trimIndent()
-        respond(socket, "text/html; charset=utf-8", body)
-    }
-
-    private fun modelButtons(status: StationStatus): String =
-        status.modelOptions.joinToString(" ") { (id, name) ->
-            val active = if (id == status.modelId) " active" else ""
-            """<a class="model$active" href="/model?id=${htmlEscape(id)}">${htmlEscape(name)}</a>"""
-        }
-
-    private fun respond(socket: Socket, contentType: String, body: String) {
-        val bytes = body.toByteArray(Charsets.UTF_8)
-        PrintWriter(socket.getOutputStream()).use { out ->
-            out.print("HTTP/1.1 200 OK\r\n")
-            out.print("Content-Type: $contentType\r\n")
-            out.print("Content-Length: ${bytes.size}\r\n")
-            out.print("Connection: close\r\n\r\n")
-            out.flush()
-            socket.getOutputStream().write(bytes)
-        }
-    }
-
-    private fun htmlEscape(value: String): String =
-        value.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
 
     private fun jsonEscape(value: String): String =
         value.replace("\\", "\\\\")
@@ -185,6 +331,7 @@ class WebControlServer(
 
     companion object {
         private const val TAG = "WebControlServer"
+        private const val SOCKET_READ_TIMEOUT = 10000
 
         fun localIpv4Address(): String? {
             return NetworkInterface.getNetworkInterfaces().asSequence()

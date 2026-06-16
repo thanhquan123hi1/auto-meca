@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trạm thị giác Mecanum</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+      background: #0b1014;
+      color: #edf7f4;
+    }
+    .page {
+      display: grid;
+      grid-template-columns: minmax(320px, 1.5fr) minmax(300px, 420px);
+      gap: 16px;
+      padding: 16px;
+      min-height: 100vh;
+    }
+    .card {
+      background: #151d23;
+      border: 1px solid #29343c;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.18);
+    }
+    h1, h2, h3 { margin: 0 0 12px; }
+    .video-box {
+      background: #06090c;
+      border-radius: 12px;
+      overflow: hidden;
+      border: 1px solid #22303a;
+      aspect-ratio: 4 / 3;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    #streamImage {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      background: #000;
+    }
+    .muted { color: #9eb4af; }
+    .grid {
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: 8px 12px;
+      align-items: start;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .on { background: #57d99a; color: #06100d; }
+    .off { background: #49545c; color: #edf7f4; }
+    .controls, .models {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-weight: 700;
+      background: #26323a;
+      color: #edf7f4;
+      cursor: pointer;
+      min-height: 48px;
+    }
+    button.primary { background: #57d99a; color: #06100d; }
+    button.danger { background: #ff6b6b; color: #210707; }
+    button.active { outline: 2px solid #8ee6bd; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .controls .wide { grid-column: span 3; }
+    .controls .span2 { grid-column: span 2; }
+    label.inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+    }
+    code, .value {
+      background: #0b1014;
+      border-radius: 6px;
+      padding: 2px 6px;
+      word-break: break-word;
+    }
+    @media (max-width: 980px) {
+      .page { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="card">
+      <h1>Trạm thị giác Mecanum</h1>
+      <div class="toolbar">
+        <button id="autoToggle" class="primary">Bật Auto</button>
+        <button id="stopBtn" class="danger">Dừng xe</button>
+        <label class="inline"><input id="overlayToggle" type="checkbox" checked> Bật khung nhận diện</label>
+      </div>
+      <div class="video-box">
+        <img id="streamImage" alt="Video trực tiếp">
+      </div>
+      <p class="muted" id="streamStatus">Đang kết nối video trực tiếp...</p>
+    </section>
+
+    <aside class="card">
+      <h2>Trạng thái</h2>
+      <div class="grid">
+        <div>Auto</div><div><span id="autoState" class="badge off">Tắt</span></div>
+        <div>Lệnh hiện tại</div><div class="value" id="commandValue">S</div>
+        <div>Lý do</div><div class="value" id="reasonValue">idle</div>
+        <div>Khoảng cách marker</div><div class="value" id="distanceValue">-</div>
+        <div>AI FPS</div><div class="value" id="fpsValue">0.0</div>
+        <div>UDP</div><div class="value" id="udpValue">OK</div>
+        <div>Wi‑Fi</div><div class="value" id="wifiValue">-</div>
+        <div>Model</div><div class="value" id="modelValue">-</div>
+      </div>
+
+      <h3 style="margin-top:20px">Điều khiển tay</h3>
+      <div class="controls">
+        <button data-command="G">Tiến trái</button>
+        <button data-command="F">Tiến</button>
+        <button data-command="H">Tiến phải</button>
+        <button data-command="L">Trái</button>
+        <button data-command="S" class="danger">Dừng</button>
+        <button data-command="R">Phải</button>
+        <button data-command="J">Lùi trái</button>
+        <button data-command="B">Lùi</button>
+        <button data-command="K">Lùi phải</button>
+        <button data-command="Q" class="span2">Xoay trái</button>
+        <button data-command="E">Xoay phải</button>
+      </div>
+
+      <h3 style="margin-top:20px">Chọn Model</h3>
+      <div id="modelButtons" class="models"></div>
+    </aside>
+  </main>
+
+  <script>
+    const els = {
+      autoToggle: document.getElementById('autoToggle'),
+      stopBtn: document.getElementById('stopBtn'),
+      overlayToggle: document.getElementById('overlayToggle'),
+      streamImage: document.getElementById('streamImage'),
+      streamStatus: document.getElementById('streamStatus'),
+      autoState: document.getElementById('autoState'),
+      commandValue: document.getElementById('commandValue'),
+      reasonValue: document.getElementById('reasonValue'),
+      distanceValue: document.getElementById('distanceValue'),
+      fpsValue: document.getElementById('fpsValue'),
+      udpValue: document.getElementById('udpValue'),
+      wifiValue: document.getElementById('wifiValue'),
+      modelValue: document.getElementById('modelValue'),
+      modelButtons: document.getElementById('modelButtons')
+    };
+
+    let ws;
+    let status = null;
+    let currentManual = null;
+    let holdTimer = null;
+
+    function setAutoButton(autoEnabled) {
+      els.autoToggle.textContent = autoEnabled ? 'Tắt Auto' : 'Bật Auto';
+      els.autoToggle.classList.toggle('danger', autoEnabled);
+      els.autoToggle.classList.toggle('primary', !autoEnabled);
+    }
+
+    function renderStatus(next) {
+      status = next;
+      els.autoState.textContent = next.autonomous ? 'Bật' : 'Tắt';
+      els.autoState.className = 'badge ' + (next.autonomous ? 'on' : 'off');
+      els.commandValue.textContent = next.command || 'S';
+      els.reasonValue.textContent = next.reason || 'idle';
+      els.distanceValue.textContent = next.markerDistanceCm == null ? '-' : `${Number(next.markerDistanceCm).toFixed(1)} cm`;
+      els.fpsValue.textContent = Number(next.aiFps || 0).toFixed(1);
+      els.udpValue.textContent = next.udpError || 'OK';
+      els.wifiValue.textContent = next.connectedWifiSsid || '-';
+      els.modelValue.textContent = next.modelName || '-';
+      setAutoButton(!!next.autonomous);
+      renderModelButtons(next);
+    }
+
+    function renderModelButtons(next) {
+      if (!Array.isArray(next.modelOptions)) return;
+      const current = next.modelId;
+      els.modelButtons.innerHTML = '';
+      next.modelOptions.forEach(([id, name]) => {
+        const btn = document.createElement('button');
+        btn.textContent = name;
+        if (id === current) btn.classList.add('active');
+        btn.addEventListener('click', () => post(`/api/model?id=${encodeURIComponent(id)}`));
+        els.modelButtons.appendChild(btn);
+      });
+    }
+
+    async function post(url) {
+      try {
+        await fetch(url, { method: 'POST' });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function send(obj) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(obj));
+      }
+    }
+
+    function startHold(command) {
+      currentManual = command;
+      send({ type: 'manual_press', command });
+      clearInterval(holdTimer);
+      holdTimer = setInterval(() => send({ type: 'manual_press', command }), 250);
+    }
+
+    function stopHold() {
+      if (!currentManual) return;
+      send({ type: 'manual_release', command: currentManual });
+      currentManual = null;
+      clearInterval(holdTimer);
+      holdTimer = null;
+    }
+
+    function attachManual(button) {
+      const command = button.dataset.command;
+      const start = (e) => {
+        e.preventDefault();
+        if (command === 'S') {
+          post('/api/stop');
+          stopHold();
+          return;
+        }
+        startHold(command);
+      };
+      const end = (e) => {
+        e.preventDefault();
+        stopHold();
+      };
+      button.addEventListener('mousedown', start);
+      button.addEventListener('touchstart', start, { passive: false });
+      button.addEventListener('mouseup', end);
+      button.addEventListener('mouseleave', end);
+      button.addEventListener('touchend', end);
+      button.addEventListener('touchcancel', end);
+    }
+
+    function connect() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${location.host}/ws`);
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = () => {
+        els.streamStatus.textContent = 'Đã kết nối video trực tiếp';
+        send({ type: 'overlay', enabled: !!els.overlayToggle.checked });
+      };
+      ws.onclose = () => {
+        els.streamStatus.textContent = 'Mất kết nối, đang thử lại...';
+        stopHold();
+        setTimeout(connect, 1200);
+      };
+      ws.onerror = () => {
+        els.streamStatus.textContent = 'Lỗi kết nối WebSocket';
+      };
+      ws.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+          const data = JSON.parse(event.data);
+          if (data.type === 'status') renderStatus(data.payload);
+          return;
+        }
+        const blob = new Blob([event.data], { type: 'image/jpeg' });
+        const url = URL.createObjectURL(blob);
+        const oldUrl = els.streamImage.dataset.url;
+        els.streamImage.src = url;
+        els.streamImage.dataset.url = url;
+        if (oldUrl) URL.revokeObjectURL(oldUrl);
+      };
+    }
+
+    els.autoToggle.addEventListener('click', () => {
+      if (!status || !status.autonomous) post('/api/auto/on');
+      else post('/api/auto/off');
+    });
+    els.stopBtn.addEventListener('click', () => post('/api/stop'));
+    els.overlayToggle.addEventListener('change', () => send({ type: 'overlay', enabled: !!els.overlayToggle.checked }));
+    document.querySelectorAll('[data-command]').forEach(attachManual);
+    connect();
+  </script>
+</body>
+</html>

@@ -7,18 +7,34 @@ import kotlin.math.abs
 class DecisionEngine(
     private val obstacleMinAreaRatio: Float = 0.06f,
     private val obstacleCloseAreaRatio: Float = 0.18f,
+    private val obstacleCenterLeftBound: Float = 0.35f,
+    private val obstacleCenterRightBound: Float = 0.65f,
+    private val avoidCommandHoldMs: Long = 300L,
     private val turnDeadzone: Float = 0.16f,
     private val goalReachedAreaRatio: Float = 0.22f,
     private val goalStopDistanceCm: Float = 30f,
+    private val goalSlowDistanceCm: Float = 45f,
+    private val goalSlowForwardPulseMs: Long = 120L,
+    private val goalSlowPauseMs: Long = 200L,
     private val goalLostGraceMs: Long = 450L,
+    private val goalReachedHoldMs: Long = 1500L,
     private val rotatePulseMs: Long = 120L,
     private val rotatePauseMs: Long = 100L,
+    private val searchPulseMs: Long = 180L,
+    private val searchPauseMs: Long = 900L,
+    private val defaultSearchCommand: Char = 'Q',
 ) {
     private var lastMarkerSeenAt = 0L
     private var lastMarkerOffset = 0f
+    private var lastVisibleCommand = 'S'
     private var rotatePhaseCommand = 'S'
     private var rotatePhaseStartedAt = 0L
-    @Volatile var lastReason: String = "idle"
+    private var goalReached = false
+    private var goalReachedAt = 0L
+    private var lastAvoidCommand = 'S'
+    private var lastAvoidStartedAt = 0L
+
+    @Volatile var lastReason: String = "Đang chờ"
         private set
 
     fun decide(
@@ -29,60 +45,128 @@ class DecisionEngine(
         autonomous: Boolean,
     ): Char {
         if (!autonomous || frameWidth <= 0 || frameHeight <= 0) {
-            lastReason = "disarmed"
+            resetTransientState()
+            lastReason = "Tắt Auto"
             return 'S'
         }
 
         val now = System.currentTimeMillis()
-        val frameArea = (frameWidth * frameHeight).coerceAtLeast(1).toFloat()
 
-        val obstacle = detections.maxByOrNull { it.area }
-        if (obstacle != null) {
-            val ratio = obstacle.area / frameArea
-            if (ratio >= obstacleCloseAreaRatio) {
-                lastReason = "obstacle close area=${"%.2f".format(ratio)}"
-                return 'B'
+        if (goalReached) {
+            lastReason = if (now - goalReachedAt <= goalReachedHoldMs) {
+                "Đã tới marker"
+            } else {
+                "Đã tới marker, đang giữ vị trí"
             }
-            if (ratio >= obstacleMinAreaRatio) {
-                val command = if (obstacle.centerX >= frameWidth / 2f) 'Q' else 'E'
-                lastReason = "avoid obstacle ${if (command == 'Q') "right" else "left"} area=${"%.2f".format(ratio)}"
-                return command
-            }
-        }
-
-        if (marker != null) {
-            lastMarkerSeenAt = now
-            val markerRatio = marker.area / frameArea
-            if (isGoalReached(marker, markerRatio)) {
-                rotatePhaseCommand = 'S'
-                lastReason = "goal reached area=${"%.2f".format(markerRatio)}"
-                return 'S'
-            }
-
-            val offset = (marker.centerX - frameWidth / 2f) / (frameWidth / 2f)
-            lastMarkerOffset = offset
-            if (offset < -turnDeadzone) {
-                val command = rotateToward('Q', offset, now)
-                lastReason = "marker left offset=${"%.2f".format(offset)}"
-                return command
-            }
-            if (offset > turnDeadzone) {
-                val command = rotateToward('E', offset, now)
-                lastReason = "marker right offset=${"%.2f".format(offset)}"
-                return command
-            }
-
-            rotatePhaseCommand = 'S'
-            lastReason = "marker centered"
-            return 'F'
-        }
-
-        if (now - lastMarkerSeenAt <= goalLostGraceMs) {
-            lastReason = "marker grace stop"
             return 'S'
         }
-        val command = searchCommand(now)
-        lastReason = "search marker"
+
+        decideObstacle(frameWidth, frameHeight, detections, now)?.let { return it }
+        decideMarker(frameWidth, frameHeight, marker, now)?.let { return it }
+
+        if (now - lastMarkerSeenAt <= goalLostGraceMs) {
+            rotatePhaseCommand = 'S'
+            lastReason = "Vừa mất marker, chờ ổn định"
+            return 'S'
+        }
+
+        val command = searchForMarker(now)
+        lastReason = "Đang tìm marker"
+        return command
+    }
+
+    private fun decideObstacle(
+        frameWidth: Int,
+        frameHeight: Int,
+        detections: List<Detection>,
+        now: Long,
+    ): Char? {
+        val obstacle = detections.maxByOrNull { it.area } ?: return null
+        val frameArea = (frameWidth * frameHeight).coerceAtLeast(1).toFloat()
+        val ratio = obstacle.area / frameArea
+        if (ratio < obstacleMinAreaRatio) return null
+
+        if (lastAvoidCommand != 'S' && now - lastAvoidStartedAt <= avoidCommandHoldMs) {
+            lastReason = when (lastAvoidCommand) {
+                'B' -> "Vật cản quá gần"
+                'Q' -> "Đang giữ hướng né sang trái"
+                'E' -> "Đang giữ hướng né sang phải"
+                else -> "Đang né vật cản"
+            }
+            return lastAvoidCommand
+        }
+
+        val region = obstacle.centerX / frameWidth.toFloat()
+        val command = when {
+            ratio >= obstacleCloseAreaRatio -> 'B'
+            region < obstacleCenterLeftBound -> 'E'
+            region > obstacleCenterRightBound -> 'Q'
+            lastMarkerOffset < -0.05f -> 'Q'
+            lastMarkerOffset > 0.05f -> 'E'
+            lastVisibleCommand == 'E' -> 'E'
+            else -> 'Q'
+        }
+
+        lastAvoidCommand = command
+        lastAvoidStartedAt = now
+        rotatePhaseCommand = 'S'
+        lastReason = when (command) {
+            'B' -> "Vật cản quá gần"
+            'Q' -> if (region > obstacleCenterRightBound) "Né vật cản bên phải" else "Né vật cản phía trước sang trái"
+            'E' -> if (region < obstacleCenterLeftBound) "Né vật cản bên trái" else "Né vật cản phía trước sang phải"
+            else -> "Đang né vật cản"
+        }
+        return command
+    }
+
+    private fun decideMarker(
+        frameWidth: Int,
+        frameHeight: Int,
+        marker: GoalMarker?,
+        now: Long,
+    ): Char? {
+        marker ?: return null
+        lastAvoidCommand = 'S'
+        lastMarkerSeenAt = now
+
+        val frameArea = (frameWidth * frameHeight).coerceAtLeast(1).toFloat()
+        val markerRatio = marker.area / frameArea
+        if (isGoalReached(marker, markerRatio)) {
+            goalReached = true
+            goalReachedAt = now
+            rotatePhaseCommand = 'S'
+            lastVisibleCommand = 'S'
+            lastReason = "Đã tới marker"
+            return 'S'
+        }
+
+        val offset = (marker.centerX - frameWidth / 2f) / (frameWidth / 2f)
+        lastMarkerOffset = offset
+        if (offset < -turnDeadzone) {
+            lastVisibleCommand = 'Q'
+            val command = rotateToward('Q', offset, now)
+            lastReason = "Đang căn marker sang trái"
+            return command
+        }
+        if (offset > turnDeadzone) {
+            lastVisibleCommand = 'E'
+            val command = rotateToward('E', offset, now)
+            lastReason = "Đang căn marker sang phải"
+            return command
+        }
+
+        rotatePhaseCommand = 'S'
+        lastVisibleCommand = 'F'
+        val command = approachGoal(marker, now)
+        lastReason = if (command == 'F') {
+            if (marker.distanceCm != null && marker.distanceCm <= goalSlowDistanceCm) {
+                "Đang tiến chậm tới marker"
+            } else {
+                "Đang tiến tới marker"
+            }
+        } else {
+            "Đang tiến chậm tới marker"
+        }
         return command
     }
 
@@ -90,6 +174,22 @@ class DecisionEngine(
         val distance = marker.distanceCm
         if (distance != null) return distance <= goalStopDistanceCm
         return markerRatio >= goalReachedAreaRatio
+    }
+
+    private fun approachGoal(marker: GoalMarker, now: Long): Char {
+        val distance = marker.distanceCm
+        if (distance == null || distance > goalSlowDistanceCm || goalSlowDistanceCm <= goalStopDistanceCm) {
+            return 'F'
+        }
+        if (distance <= goalStopDistanceCm) {
+            return 'S'
+        }
+        val pulse = goalSlowForwardPulseMs.coerceAtLeast(0L)
+        val pause = goalSlowPauseMs.coerceAtLeast(0L)
+        if (pulse <= 0L) return 'S'
+        if (pause <= 0L) return 'F'
+        val phase = now % (pulse + pause)
+        return if (phase < pulse) 'F' else 'S'
     }
 
     private fun rotateToward(command: Char, offset: Float, now: Long): Char {
@@ -111,11 +211,25 @@ class DecisionEngine(
         return if (phase < pulse) command else 'S'
     }
 
-    private fun searchCommand(now: Long): Char {
-        val command = if (lastMarkerOffset < 0f) 'Q' else 'E'
-        val pulse = 180L
-        val pause = 900L
+    private fun searchForMarker(now: Long): Char {
+        val command = when {
+            lastMarkerOffset < -0.05f -> 'Q'
+            lastMarkerOffset > 0.05f -> 'E'
+            lastVisibleCommand == 'E' -> 'E'
+            lastVisibleCommand == 'Q' -> 'Q'
+            else -> defaultSearchCommand.uppercaseChar().takeIf { it == 'Q' || it == 'E' } ?: 'Q'
+        }
+
+        val pulse = searchPulseMs.coerceAtLeast(0L)
+        val pause = searchPauseMs.coerceAtLeast(0L)
+        if (pulse <= 0L) return 'S'
+        if (pause <= 0L) return command
         val phase = now % (pulse + pause)
         return if (phase < pulse) command else 'S'
+    }
+
+    private fun resetTransientState() {
+        rotatePhaseCommand = 'S'
+        lastAvoidCommand = 'S'
     }
 }

@@ -11,10 +11,14 @@ import org.opencv.objdetect.ArucoDetector
 import org.opencv.objdetect.DetectorParameters
 import org.opencv.objdetect.Objdetect
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.tan
 
 class ArucoGoalDetector(
     private val targetId: Int = 0,
     private val minArea: Float = 80f,
+    private val markerSizeCm: Float = 10f,
+    private val horizontalFovDeg: Float = 60f,
 ) : AutoCloseable {
     private val detector: ArucoDetector
 
@@ -46,7 +50,7 @@ class ArucoGoalDetector(
                 if (id != targetId) continue
                 val points = readPoints(corners.getOrNull(i) ?: continue)
                 if (points.size != 4) continue
-                val marker = toMarker(id, points)
+                val marker = toMarker(id, points, bitmap.width)
                 if (marker.area < minArea) continue
                 if (best == null || marker.area > best.area) best = marker
             }
@@ -68,7 +72,7 @@ class ArucoGoalDetector(
         return points
     }
 
-    private fun toMarker(id: Int, points: List<Point>): GoalMarker {
+    private fun toMarker(id: Int, points: List<Point>, frameWidth: Int): GoalMarker {
         val left = points.minOf { it.x }.toFloat()
         val top = points.minOf { it.y }.toFloat()
         val right = points.maxOf { it.x }.toFloat()
@@ -76,7 +80,27 @@ class ArucoGoalDetector(
         val centerX = points.map { it.x }.average().toFloat()
         val centerY = points.map { it.y }.average().toFloat()
         val area = polygonArea(points).toFloat()
-        return GoalMarker(id, RectF(left, top, right, bottom), centerX, centerY, area)
+        val distanceCm = estimateDistanceCm(points, frameWidth)
+        return GoalMarker(id, RectF(left, top, right, bottom), centerX, centerY, area, distanceCm)
+    }
+
+    private fun estimateDistanceCm(points: List<Point>, frameWidth: Int): Float? {
+        if (markerSizeCm <= 0f || horizontalFovDeg <= 1f || frameWidth <= 0) return null
+
+        val edgeLengths = buildList {
+            for (i in points.indices) {
+                val a = points[i]
+                val b = points[(i + 1) % points.size]
+                val dx = a.x - b.x
+                val dy = a.y - b.y
+                add(kotlin.math.sqrt(dx * dx + dy * dy).toFloat())
+            }
+        }
+        val markerWidthPx = edgeLengths.average().toFloat().takeIf { it > 1f } ?: return null
+        val focalPx = ((frameWidth / 2f) / tan(Math.toRadians(horizontalFovDeg / 2.0))).toFloat()
+        if (focalPx <= 0f) return null
+        val distance = (markerSizeCm * focalPx) / max(markerWidthPx, 1f)
+        return if (distance.isFinite() && distance > 0f) distance else null
     }
 
     private fun polygonArea(points: List<Point>): Double {

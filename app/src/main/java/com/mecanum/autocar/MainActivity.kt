@@ -1,16 +1,29 @@
 package com.mecanum.autocar
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Size
+import android.net.Uri
+import android.text.SpannableString
+import android.text.method.LinkMovementMethod
+import android.text.style.ClickableSpan
+import android.view.View
 import android.view.WindowManager
+import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -23,6 +36,7 @@ import com.mecanum.autocar.ai.VisionResult
 import com.mecanum.autocar.ai.YoloTfliteDetector
 import com.mecanum.autocar.ai.toBitmapRotated
 import com.mecanum.autocar.control.DecisionEngine
+import com.mecanum.autocar.control.StationController
 import com.mecanum.autocar.control.UdpCommandSender
 import com.mecanum.autocar.web.StationStatus
 import com.mecanum.autocar.web.WebControlServer
@@ -36,6 +50,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlayView: OverlayView
     private lateinit var statusText: TextView
     private lateinit var webText: TextView
+    private lateinit var copyWebButton: Button
+    private lateinit var autoToggleButton: androidx.appcompat.widget.AppCompatButton
 
     private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val processing = AtomicBoolean(false)
@@ -43,9 +59,14 @@ class MainActivity : AppCompatActivity() {
     private val udpSender = UdpCommandSender()
     private val detectorLock = Any()
 
-    @Volatile private var autonomous = false
-    @Volatile private var currentCommand = 'S'
-    @Volatile private var aiFps = 0f
+    private val controller = StationController(
+        onAutonomousChanged = { enabled ->
+            if (enabled) udpSender.start() else udpSender.stopAutonomous()
+            runOnUiThread { syncAutoSwitch(enabled) }
+        },
+        onActivityChanged = { runOnUiThread { updateStatus() } },
+    )
+
     @Volatile private var lastResult: VisionResult? = null
     @Volatile private var yoloLoadError = ""
     @Volatile private var arucoLoadError = ""
@@ -70,6 +91,16 @@ class MainActivity : AppCompatActivity() {
         overlayView = findViewById(R.id.overlayView)
         statusText = findViewById(R.id.statusText)
         webText = findViewById(R.id.webText)
+        copyWebButton = findViewById(R.id.copyWebButton)
+        autoToggleButton = findViewById(R.id.autoToggleButton)
+
+        autoToggleButton.setOnClickListener {
+            controller.setAutonomous(!controller.autonomous)
+        }
+        syncAutoSwitch(false)
+        copyWebButton.setOnClickListener {
+            copyWebUrlToClipboard()
+        }
 
         initDetectors()
         startWebServer()
@@ -79,9 +110,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        autonomous = false
+        controller.setAutonomous(false)
         udpSender.shutdown()
-        webServer?.stop()
+        webServer?.stopServer()
         yoloDetector?.close()
         arucoDetector?.close()
         cameraExecutor.shutdownNow()
@@ -89,60 +120,67 @@ class MainActivity : AppCompatActivity() {
 
     private fun initDetectors() {
         loadYoloModel(currentModel)
-
         try {
-            arucoDetector = ArucoGoalDetector(targetId = 0)
+            arucoDetector = ArucoGoalDetector(targetId = 0, markerSizeCm = 10f, horizontalFovDeg = 60f)
         } catch (error: Exception) {
             arucoLoadError = error.message ?: error.javaClass.simpleName
+            controller.arucoError = arucoLoadError
         }
     }
 
     private fun startWebServer() {
         webServer = WebControlServer(
-            statusProvider = {
-                StationStatus(
-                    autonomous = autonomous,
-                    command = currentCommand,
-                    reason = decisionEngine.lastReason,
-                    modelId = currentModel.id,
-                    modelName = currentModel.displayName,
-                    modelOptions = DetectorModel.OPTIONS.map { it.id to it.displayName },
-                    aiFps = aiFps,
-                    udpError = udpSender.lastError,
-                )
-            },
-            onStart = {
-                autonomous = true
-                udpSender.start()
-                updateStatus()
-            },
-            onStop = {
-                autonomous = false
-                currentCommand = 'S'
+            context = applicationContext,
+            controller = controller,
+            statusProvider = { currentStatus() },
+            onAutoOn = { controller.setAutonomous(true) },
+            onAutoOff = { controller.setAutonomous(false) },
+            onStopVehicle = {
+                controller.stopAll()
                 udpSender.stopAutonomous()
-                updateStatus()
+                runOnUiThread { updateStatus() }
             },
             onModelSelect = { modelId ->
-                autonomous = false
-                currentCommand = 'S'
-                udpSender.stopAutonomous()
+                controller.setAutonomous(false)
+                controller.currentCommand = 'S'
                 loadYoloModel(DetectorModel.byId(modelId))
-                updateStatus()
+                runOnUiThread { updateStatus() }
             },
-        ).also { it.start() }
+        ).also { it.startServer() }
+    }
+
+    private fun currentStatus(): StationStatus {
+        return StationStatus(
+            autonomous = controller.autonomous,
+            command = controller.currentCommand,
+            reason = controller.reason,
+            modelId = currentModel.id,
+            modelName = currentModel.displayName,
+            modelOptions = DetectorModel.OPTIONS.map { it.id to it.displayName },
+            aiFps = controller.aiFps,
+            udpError = controller.udpError,
+            markerDistanceCm = controller.markerDistanceCm,
+            markerId = controller.markerId,
+            detectionCount = controller.detectionCount,
+            connectedWifiSsid = currentWifiSsid(),
+        )
     }
 
     private fun loadYoloModel(model: DetectorModel) {
         synchronized(detectorLock) {
             currentModel = model
+            controller.modelId = model.id
+            controller.modelName = model.displayName
             yoloLoadError = ""
+            controller.yoloError = ""
             yoloDetector?.close()
             yoloDetector = null
-            aiFps = 0f
+            controller.aiFps = 0f
             try {
                 yoloDetector = YoloTfliteDetector(this, model.assetName)
             } catch (error: Exception) {
                 yoloLoadError = error.message ?: error.javaClass.simpleName
+                controller.yoloError = yoloLoadError
             }
         }
     }
@@ -163,7 +201,7 @@ class MainActivity : AppCompatActivity() {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
             val analysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(640, 480))
+                .setResolutionSelector(ResolutionSelector.Builder().setResolutionStrategy(ResolutionStrategy(Size(640, 480), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)).build())
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                 .build()
@@ -206,38 +244,51 @@ class MainActivity : AppCompatActivity() {
             val marker: GoalMarker? = arucoDetector?.detect(bitmap)
             if (elapsedMs > 0L) {
                 val instantFps = 1000f / elapsedMs.coerceAtLeast(1L)
-                aiFps = if (aiFps <= 0f) instantFps else aiFps * 0.85f + instantFps * 0.15f
+                controller.aiFps = if (controller.aiFps <= 0f) instantFps else controller.aiFps * 0.85f + instantFps * 0.15f
             }
 
-            val command = decisionEngine.decide(
+            val manualCommand = controller.activeManualCommand(System.currentTimeMillis())
+            val command = manualCommand ?: decisionEngine.decide(
                 frameWidth = bitmap.width,
                 frameHeight = bitmap.height,
                 detections = detections,
                 marker = marker,
-                autonomous = autonomous,
+                autonomous = controller.autonomous,
             )
-            currentCommand = command
-            udpSender.setCommand(command)
+            controller.currentCommand = command
+            controller.reason = if (manualCommand != null) "Điều khiển tay từ web" else decisionEngine.lastReason
+            controller.detectionCount = detections.size
+            controller.applyMarker(marker)
+            controller.udpError = udpSender.lastError
+
+            if (controller.shouldDrive) {
+                udpSender.start()
+                udpSender.setCommand(command)
+            } else {
+                udpSender.setCommand('S')
+            }
 
             val visionResult = VisionResult(
                 frameWidth = bitmap.width,
                 frameHeight = bitmap.height,
                 detections = detections,
                 marker = marker,
-                aiFps = aiFps,
+                aiFps = controller.aiFps,
                 command = command,
-                reason = decisionEngine.lastReason,
-                autonomous = autonomous,
+                reason = controller.reason,
+                autonomous = controller.autonomous,
             )
             lastResult = visionResult
+            overlayView.update(visionResult)
+            webServer?.submitFrame(bitmap, visionResult)
             bitmap.recycle()
 
             runOnUiThread {
-                overlayView.update(visionResult)
                 updateStatus()
             }
         } catch (error: Exception) {
             yoloLoadError = yoloLoadError.ifBlank { error.message ?: error.javaClass.simpleName }
+            controller.yoloError = yoloLoadError
             runOnUiThread { updateStatus() }
         } finally {
             processing.set(false)
@@ -245,23 +296,93 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun syncAutoSwitch(enabled: Boolean) {
+        autoToggleButton.text = getString(if (enabled) R.string.auto_switch_on else R.string.auto_switch_off)
+        autoToggleButton.backgroundTintList = android.content.res.ColorStateList.valueOf(
+            android.graphics.Color.parseColor(if (enabled) "#57D99A" else "#26323A")
+        )
+        autoToggleButton.setTextColor(
+            android.graphics.Color.parseColor(if (enabled) "#06100D" else "#F2F7F5")
+        )
+    }
+
     private fun updateStatus() {
         val result = lastResult
-        val yoloState = if (yoloDetector == null) "YOLO lỗi: ${yoloLoadError.ifBlank { "missing ${currentModel.assetName}" }}" else "YOLO OK"
-        val arucoState = if (arucoDetector == null) "ArUco lỗi: $arucoLoadError" else "ArUco OK"
-        val udpState = udpSender.lastError.ifBlank { "OK" }
+        val yoloState = if (yoloDetector == null) {
+            val fallback = yoloLoadError.ifBlank {
+                getString(R.string.status_yolo_missing, currentModel.assetName)
+            }
+            getString(R.string.status_yolo_error, fallback)
+        } else {
+            getString(R.string.status_yolo_ok)
+        }
+        val arucoState = if (arucoDetector == null) {
+            getString(R.string.status_aruco_error, arucoLoadError)
+        } else {
+            getString(R.string.status_aruco_ok)
+        }
+        val udpState = udpSender.lastError.ifBlank { getString(R.string.udp_ok) }
+        val markerText = result?.marker?.id?.toString() ?: getString(R.string.status_unknown_marker)
+        val fpsText = String.format(Locale.US, "%.1f", controller.aiFps)
+        val distanceText = controller.markerDistanceCm?.let { String.format(Locale.US, "%.1f cm", it) }
+            ?: getString(R.string.status_distance_unknown)
+
         statusText.text = buildString {
-            appendLine(if (autonomous) "AUTO: ON" else "AUTO: OFF")
-            appendLine("Model: ${currentModel.displayName}")
-            appendLine("CMD: $currentCommand  FPS: ${String.format(Locale.US, "%.1f", aiFps)}")
-            appendLine("Reason: ${result?.reason ?: decisionEngine.lastReason}")
-            appendLine("Objects: ${result?.detections?.size ?: 0}  Marker: ${result?.marker?.id ?: "-"}")
-            appendLine("UDP: $udpState")
+            appendLine(if (controller.autonomous) getString(R.string.status_auto_on) else getString(R.string.status_auto_off))
+            appendLine(getString(R.string.status_model, currentModel.displayName))
+            appendLine(getString(R.string.status_cmd_fps, controller.currentCommand.toString(), fpsText))
+            appendLine(getString(R.string.status_reason, controller.reason))
+            appendLine(getString(R.string.status_objects_marker, result?.detections?.size ?: 0, markerText))
+            appendLine(getString(R.string.status_marker_distance, distanceText))
+            appendLine(getString(R.string.status_udp, udpState))
             appendLine(yoloState)
             append(arucoState)
         }
-        val url = webServer?.url ?: "starting..."
-        webText.text = "Kết nối WiFi Mecanum-Car rồi mở trên laptop:\n$url"
+
+        val url = webServer?.url ?: getString(R.string.web_starting)
+        val wifi = currentWifiSsid().ifBlank { getString(R.string.wifi_unknown) }
+        webText.text = buildWebHintText(url, wifi)
+        webText.movementMethod = LinkMovementMethod.getInstance()
+        syncAutoSwitch(controller.autonomous)
+    }
+
+
+    private fun buildWebHintText(url: String, wifi: String): SpannableString {
+        val title = getString(R.string.web_hint, url)
+        val wifiText = getString(R.string.wifi_hint, wifi)
+        val full = "$title\n$wifiText"
+        val span = SpannableString(full)
+        val start = full.indexOf(url)
+        if (start >= 0 && url.startsWith("http")) {
+            span.setSpan(object : ClickableSpan() {
+                override fun onClick(widget: View) {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    } catch (_: Exception) {
+                        copyWebUrlToClipboard()
+                    }
+                }
+            }, start, start + url.length, SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        return span
+    }
+
+    private fun copyWebUrlToClipboard() {
+        val url = webServer?.url ?: return
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+        clipboard.setPrimaryClip(ClipData.newPlainText("web-link", url))
+        Toast.makeText(this, getString(R.string.copy_web_link_done), Toast.LENGTH_SHORT).show()
+    }
+    @Suppress("DEPRECATION")
+    private fun currentWifiSsid(): String {
+        return try {
+            val wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as? android.net.wifi.WifiManager
+            val raw = wifiManager?.connectionInfo?.ssid.orEmpty()
+            raw.removePrefix("\"").removeSuffix("\"")
+                .takeIf { it.isNotBlank() && it != "<unknown ssid>" } ?: ""
+        } catch (_: Exception) {
+            ""
+        }
     }
 
     companion object {

@@ -1,4 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Mecanum Vision Station</string>
+    <string name="app_name">Trạm thị giác Mecanum</string>
+    <string name="auto_switch_label">Tự động</string>
+    <string name="auto_switch_on">Bật</string>
+    <string name="auto_switch_off">Tắt</string>
+    <string name="status_auto_on">Tự động: Bật</string>
+    <string name="status_auto_off">Tự động: Tắt</string>
+    <string name="status_model">Model: %1$s</string>
+    <string name="status_cmd_fps">Lệnh hiện tại: %1$s   FPS AI: %2$s</string>
+    <string name="status_reason">Lý do: %1$s</string>
+    <string name="status_objects_marker">Vật cản: %1$d   Marker: %2$s</string>
+    <string name="status_marker_distance">Khoảng cách marker: %1$s</string>
+    <string name="status_distance_unknown">-</string>
+    <string name="status_udp">UDP: %1$s</string>
+    <string name="status_yolo_ok">YOLO: OK</string>
+    <string name="status_yolo_error">YOLO lỗi: %1$s</string>
+    <string name="status_yolo_missing">thiếu %1$s</string>
+    <string name="status_aruco_ok">ArUco: OK</string>
+    <string name="status_aruco_error">ArUco lỗi: %1$s</string>
+    <string name="status_unknown_marker">-</string>
+    <string name="web_hint">Điều khiển web:\n%1$s</string>
+    <string name="wifi_hint">Wi‑Fi hiện tại: %1$s</string>
+    <string name="wifi_unknown">không xác định</string>
+    <string name="udp_ok">OK</string>
+    <string name="web_starting">đang khởi động...</string>
+    <string name="copy_web_link">Sao chép link web</string>
+    <string name="copy_web_link_done">Đã sao chép link web</string>
 </resources>

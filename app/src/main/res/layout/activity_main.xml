@@ -25,30 +25,98 @@
         app:layout_constraintStart_toStartOf="@id/previewView"
         app:layout_constraintTop_toTopOf="@id/previewView" />
 
-    <TextView
-        android:id="@+id/statusText"
+    <LinearLayout
+        android:id="@+id/topPanel"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_margin="12dp"
         android:background="@drawable/status_panel"
-        android:fontFamily="monospace"
-        android:lineSpacingExtra="2dp"
-        android:maxWidth="460dp"
-        android:textColor="#F2F7F5"
-        android:textSize="13sp"
+        android:orientation="vertical"
+        android:padding="12dp"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        app:layout_constraintTop_toTopOf="parent">
 
-    <TextView
-        android:id="@+id/webText"
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/autoLabelText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:text="@string/auto_switch_label"
+                android:textColor="#F2F7F5"
+                android:textSize="16sp" />
+
+            <androidx.appcompat.widget.AppCompatButton
+                android:id="@+id/autoToggleButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:backgroundTint="#26323A"
+                android:minHeight="40dp"
+                android:minWidth="0dp"
+                android:paddingHorizontal="14dp"
+                android:paddingVertical="6dp"
+                android:text="@string/auto_switch_off"
+                android:textAllCaps="false"
+                android:textColor="#F2F7F5"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:fontFamily="sans-serif"
+            android:lineSpacingExtra="2dp"
+            android:maxWidth="500dp"
+            android:textColor="#F2F7F5"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/webPanel"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_margin="12dp"
         android:background="@drawable/status_panel"
-        android:maxWidth="460dp"
-        android:textColor="#D9FFF2"
-        android:textSize="13sp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="12dp"
         app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toStartOf="parent" />
+        app:layout_constraintStart_toStartOf="parent">
+
+        <TextView
+            android:id="@+id/webText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif"
+            android:maxWidth="500dp"
+            android:paddingEnd="12dp"
+            android:textColor="#D9FFF2"
+            android:textIsSelectable="true"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/copyWebButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:backgroundTint="#26323A"
+            android:contentDescription="@string/copy_web_link"
+            android:minHeight="40dp"
+            android:minWidth="0dp"
+            android:paddingHorizontal="10dp"
+            android:paddingVertical="6dp"
+            android:text="Copy"
+            android:textAllCaps="false"
+            android:textColor="#D9FFF2"
+            android:textSize="12sp" />
+
+    </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
