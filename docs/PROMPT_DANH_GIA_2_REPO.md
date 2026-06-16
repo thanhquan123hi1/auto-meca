@@ -1,4 +1,4 @@
-﻿# Prompt đánh giá logic và tối ưu hai repo
+# Prompt đánh giá logic và tối ưu hai repo
 
 Bạn là kỹ sư hệ thống nhúng + Android + computer vision. Hãy đọc kỹ và đối chiếu hai repo sau như một hệ thống duy nhất:
 

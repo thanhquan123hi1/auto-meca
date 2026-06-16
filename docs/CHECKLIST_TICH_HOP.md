@@ -1,4 +1,4 @@
-﻿# Checklist kiểm tra logic tích hợp end-to-end
+# Checklist kiểm tra logic tích hợp end-to-end
 
 ## 1. Kiểm tra semantics lệnh
 - [ ] `F` trên firmware thực sự làm xe tiến theo hướng camera sau đang nhìn.

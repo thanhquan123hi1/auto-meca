@@ -31,6 +31,14 @@ data class StationStatus(
     val markerId: Int?,
     val detectionCount: Int,
     val connectedWifiSsid: String,
+    val yoloMs: Long,
+    val arucoMs: Long,
+    val pipelineMs: Long,
+    val skippedFrames: Int,
+    val markerSeenRatio: Float,
+    val avgConfidence: Float,
+    val skipRatio: Float,
+    val commandChanges: Int,
 )
 
 /**
@@ -49,8 +57,8 @@ class WebControlServer(
     private val onAutoOff: () -> Unit,
     private val onStopVehicle: () -> Unit,
     private val onModelSelect: (String) -> Unit,
-    private val targetStreamFps: Int = 12,
-    private val jpegQuality: Int = 70,
+    private val targetStreamFps: Int = 8,
+    private val jpegQuality: Int = 58,
     private val maxClients: Int = 4,
 ) : NanoWSD(port) {
 
@@ -62,6 +70,7 @@ class WebControlServer(
     private var latestRaw: Bitmap? = null
     private var latestResult: VisionResult? = null
     private var frameDirty = false
+    private var cachedStatusJson: String = "{}"
 
     @Volatile private var streaming = false
     private var streamThread: Thread? = null
@@ -73,6 +82,7 @@ class WebControlServer(
     fun startServer() {
         if (streaming) return
         streaming = true
+        cachedStatusJson = buildStatusJson(statusProvider())
         start(SOCKET_READ_TIMEOUT, false)
         streamThread = Thread(::streamLoop, "web-stream").also { it.isDaemon = true; it.start() }
         statusThread = Thread(::statusLoop, "web-status").also { it.isDaemon = true; it.start() }
@@ -105,7 +115,9 @@ class WebControlServer(
         val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return
         synchronized(frameLock) {
             latestRaw?.recycle()
-            latestRaw = copy
+            latestRaw = Bitmap.createScaledBitmap(copy, 480, 360, true).also {
+                if (it !== copy) copy.recycle()
+            }
             latestResult = result
             frameDirty = true
         }
@@ -173,8 +185,10 @@ class WebControlServer(
         val result: VisionResult?
         synchronized(frameLock) {
             if (!frameDirty || latestRaw == null) return
-            raw = latestRaw!!.copy(Bitmap.Config.ARGB_8888, false) ?: return
+            raw = latestRaw ?: return
             result = latestResult
+            latestRaw = null
+            latestResult = null
             frameDirty = false
         }
 
@@ -210,7 +224,8 @@ class WebControlServer(
         while (streaming) {
             try {
                 if (hasViewers()) {
-                    val json = "{\"type\":\"status\",\"payload\":" + buildStatusJson(statusProvider()) + "}"
+                    cachedStatusJson = buildStatusJson(statusProvider())
+                    val json = "{\"type\":\"status\",\"payload\":" + cachedStatusJson + "}"
                     for (client in clients) client.sendText(json)
                 }
             } catch (error: Exception) {
@@ -234,6 +249,14 @@ class WebControlServer(
         sb.append("\"markerDistanceCm\":").append(s.markerDistanceCm?.let { String.format(Locale.US, "%.1f", it) } ?: "null").append(",")
         sb.append("\"detectionCount\":").append(s.detectionCount).append(",")
         sb.append("\"connectedWifiSsid\":\"").append(jsonEscape(s.connectedWifiSsid)).append("\",")
+        sb.append("\"yoloMs\":").append(s.yoloMs).append(",")
+        sb.append("\"arucoMs\":").append(s.arucoMs).append(",")
+        sb.append("\"pipelineMs\":").append(s.pipelineMs).append(",")
+        sb.append("\"skippedFrames\":").append(s.skippedFrames).append(",")
+        sb.append("\"markerSeenRatio\":").append(String.format(Locale.US, "%.3f", s.markerSeenRatio)).append(",")
+        sb.append("\"avgConfidence\":").append(String.format(Locale.US, "%.3f", s.avgConfidence)).append(",")
+        sb.append("\"skipRatio\":").append(String.format(Locale.US, "%.3f", s.skipRatio)).append(",")
+        sb.append("\"commandChanges\":").append(s.commandChanges).append(",")
         sb.append("\"modelOptions\":[")
         s.modelOptions.forEachIndexed { index, (id, name) ->
             if (index > 0) sb.append(",")
@@ -245,7 +268,7 @@ class WebControlServer(
 
     inner class DashboardSocket(handshake: IHTTPSession) : WebSocket(handshake) {
         val id: String = "client-${clientIds.incrementAndGet()}"
-        @Volatile var overlayEnabled: Boolean = true
+        @Volatile var overlayEnabled: Boolean = false
 
         override fun onOpen() {
             if (clients.size >= maxClients) {
@@ -257,7 +280,8 @@ class WebControlServer(
             }
             clients.add(this)
             try {
-                sendText("{\"type\":\"status\",\"payload\":" + buildStatusJson(statusProvider()) + "}")
+                cachedStatusJson = buildStatusJson(statusProvider())
+                sendText("{\"type\":\"status\",\"payload\":" + cachedStatusJson + "}")
             } catch (_: Exception) {
             }
         }
@@ -301,8 +325,12 @@ class WebControlServer(
             "manual_press" -> {
                 val command = extractJsonString(text, "command")?.firstOrNull() ?: return
                 controller.pressManual(command, socket.id, System.currentTimeMillis())
+                cachedStatusJson = buildStatusJson(statusProvider())
             }
-            "manual_release" -> controller.releaseManual(socket.id)
+            "manual_release" -> {
+                controller.releaseManual(socket.id)
+                cachedStatusJson = buildStatusJson(statusProvider())
+            }
             "overlay" -> {
                 socket.overlayEnabled = text.contains("\"enabled\":true")
             }

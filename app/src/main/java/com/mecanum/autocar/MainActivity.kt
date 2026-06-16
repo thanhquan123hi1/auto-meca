@@ -40,6 +40,7 @@ import com.mecanum.autocar.control.StationController
 import com.mecanum.autocar.control.UdpCommandSender
 import com.mecanum.autocar.web.StationStatus
 import com.mecanum.autocar.web.WebControlServer
+import java.util.ArrayDeque
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -65,17 +66,41 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread { syncAutoSwitch(enabled) }
         },
         onActivityChanged = { runOnUiThread { updateStatus() } },
+        onManualCommand = { command ->
+            if (command == 'S') {
+                udpSender.stopAutonomous()
+            } else {
+                udpSender.start()
+                udpSender.setCommand(command)
+            }
+        },
     )
 
     @Volatile private var lastResult: VisionResult? = null
     @Volatile private var yoloLoadError = ""
     @Volatile private var arucoLoadError = ""
     @Volatile private var currentModel = DetectorModel.OPTIONS.first()
+    @Volatile private var cachedWifiSsid = ""
+    @Volatile private var lastWifiRefreshAt = 0L
+    @Volatile private var lastYoloMs = 0L
+    @Volatile private var lastArucoMs = 0L
+    @Volatile private var lastPipelineMs = 0L
+    @Volatile private var lastCommandChanges = 0
+    @Volatile private var lastMarkerSeenRatio = 0f
+    @Volatile private var lastAvgConfidence = 0f
+    @Volatile private var lastSkipRatio = 0f
+    @Volatile private var lastMarker: GoalMarker? = null
 
     private var yoloDetector: YoloTfliteDetector? = null
     private var arucoDetector: ArucoGoalDetector? = null
     private var webServer: WebControlServer? = null
     private var lastInferenceAt = 0L
+    private var frameCounter = 0
+    private var skippedFrames = 0
+    private val markerSeenWindow = ArrayDeque<Boolean>()
+    private val confidenceWindow = ArrayDeque<Float>()
+    private val commandWindow = ArrayDeque<Char>()
+    private val frameOutcomeWindow = ArrayDeque<Boolean>()
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -94,13 +119,9 @@ class MainActivity : AppCompatActivity() {
         copyWebButton = findViewById(R.id.copyWebButton)
         autoToggleButton = findViewById(R.id.autoToggleButton)
 
-        autoToggleButton.setOnClickListener {
-            controller.setAutonomous(!controller.autonomous)
-        }
+        autoToggleButton.setOnClickListener { controller.setAutonomous(!controller.autonomous) }
         syncAutoSwitch(false)
-        copyWebButton.setOnClickListener {
-            copyWebUrlToClipboard()
-        }
+        copyWebButton.setOnClickListener { copyWebUrlToClipboard() }
 
         initDetectors()
         startWebServer()
@@ -163,6 +184,14 @@ class MainActivity : AppCompatActivity() {
             markerId = controller.markerId,
             detectionCount = controller.detectionCount,
             connectedWifiSsid = currentWifiSsid(),
+            yoloMs = lastYoloMs,
+            arucoMs = lastArucoMs,
+            pipelineMs = lastPipelineMs,
+            skippedFrames = skippedFrames,
+            markerSeenRatio = lastMarkerSeenRatio,
+            avgConfidence = lastAvgConfidence,
+            skipRatio = lastSkipRatio,
+            commandChanges = lastCommandChanges,
         )
     }
 
@@ -176,6 +205,9 @@ class MainActivity : AppCompatActivity() {
             yoloDetector?.close()
             yoloDetector = null
             controller.aiFps = 0f
+            lastYoloMs = 0L
+            lastArucoMs = 0L
+            lastPipelineMs = 0L
             try {
                 yoloDetector = YoloTfliteDetector(this, model.assetName)
             } catch (error: Exception) {
@@ -201,49 +233,60 @@ class MainActivity : AppCompatActivity() {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
             val analysis = ImageAnalysis.Builder()
-                .setResolutionSelector(ResolutionSelector.Builder().setResolutionStrategy(ResolutionStrategy(Size(640, 480), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)).build())
+                .setResolutionSelector(
+                    ResolutionSelector.Builder()
+                        .setResolutionStrategy(
+                            ResolutionStrategy(
+                                Size(640, 480),
+                                ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                            )
+                        ).build()
+                )
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                 .build()
-                .also { useCase ->
-                    useCase.setAnalyzer(cameraExecutor, ::analyzeFrame)
-                }
+                .also { useCase -> useCase.setAnalyzer(cameraExecutor, ::analyzeFrame) }
 
             cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(
-                this,
-                CameraSelector.DEFAULT_BACK_CAMERA,
-                preview,
-                analysis,
-            )
+            cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun analyzeFrame(image: androidx.camera.core.ImageProxy) {
         val now = SystemClock.elapsedRealtime()
         if (now - lastInferenceAt < MIN_INFERENCE_INTERVAL_MS || !processing.compareAndSet(false, true)) {
+            skippedFrames++
+            recordFrameOutcome(true)
             image.close()
             return
         }
         lastInferenceAt = now
 
         try {
+            val pipelineStartedAt = SystemClock.elapsedRealtimeNanos()
             val bitmap = image.toBitmapRotated()
             val detections: List<Detection>
-            var elapsedMs = 0L
+            var yoloMs = 0L
             synchronized(detectorLock) {
                 val yolo = yoloDetector
                 if (yolo != null) {
                     val result = yolo.detect(bitmap)
-                    detections = result.first
-                    elapsedMs = result.second
+                    detections = result.detections
+                    yoloMs = result.inferenceMs + result.preprocessMs
                 } else {
                     detections = emptyList()
                 }
             }
-            val marker: GoalMarker? = arucoDetector?.detect(bitmap)
-            if (elapsedMs > 0L) {
-                val instantFps = 1000f / elapsedMs.coerceAtLeast(1L)
+
+            frameCounter += 1
+            val shouldRunAruco = frameCounter % ARUCO_EVERY_N_FRAMES == 0
+            val markerStartedAt = SystemClock.elapsedRealtimeNanos()
+            val detectedMarker: GoalMarker? = if (shouldRunAruco) arucoDetector?.detect(bitmap) else lastMarker
+            val arucoMs = if (shouldRunAruco) (SystemClock.elapsedRealtimeNanos() - markerStartedAt) / 1_000_000 else 0L
+            lastMarker = detectedMarker
+
+            if (yoloMs > 0L) {
+                val instantFps = 1000f / yoloMs.coerceAtLeast(1L)
                 controller.aiFps = if (controller.aiFps <= 0f) instantFps else controller.aiFps * 0.85f + instantFps * 0.15f
             }
 
@@ -252,14 +295,19 @@ class MainActivity : AppCompatActivity() {
                 frameWidth = bitmap.width,
                 frameHeight = bitmap.height,
                 detections = detections,
-                marker = marker,
+                marker = detectedMarker,
                 autonomous = controller.autonomous,
             )
             controller.currentCommand = command
             controller.reason = if (manualCommand != null) "Điều khiển tay từ web" else decisionEngine.lastReason
             controller.detectionCount = detections.size
-            controller.applyMarker(marker)
+            controller.applyMarker(detectedMarker)
             controller.udpError = udpSender.lastError
+            lastYoloMs = yoloMs
+            lastArucoMs = arucoMs
+            lastPipelineMs = (SystemClock.elapsedRealtimeNanos() - pipelineStartedAt) / 1_000_000
+            updateRollingMetrics(detectedMarker != null, detections, command)
+            recordFrameOutcome(false)
 
             if (controller.shouldDrive) {
                 udpSender.start()
@@ -272,7 +320,7 @@ class MainActivity : AppCompatActivity() {
                 frameWidth = bitmap.width,
                 frameHeight = bitmap.height,
                 detections = detections,
-                marker = marker,
+                marker = detectedMarker,
                 aiFps = controller.aiFps,
                 command = command,
                 reason = controller.reason,
@@ -283,9 +331,7 @@ class MainActivity : AppCompatActivity() {
             webServer?.submitFrame(bitmap, visionResult)
             bitmap.recycle()
 
-            runOnUiThread {
-                updateStatus()
-            }
+            runOnUiThread { updateStatus() }
         } catch (error: Exception) {
             yoloLoadError = yoloLoadError.ifBlank { error.message ?: error.javaClass.simpleName }
             controller.yoloError = yoloLoadError
@@ -301,17 +347,13 @@ class MainActivity : AppCompatActivity() {
         autoToggleButton.backgroundTintList = android.content.res.ColorStateList.valueOf(
             android.graphics.Color.parseColor(if (enabled) "#57D99A" else "#26323A")
         )
-        autoToggleButton.setTextColor(
-            android.graphics.Color.parseColor(if (enabled) "#06100D" else "#F2F7F5")
-        )
+        autoToggleButton.setTextColor(android.graphics.Color.parseColor(if (enabled) "#06100D" else "#F2F7F5"))
     }
 
     private fun updateStatus() {
         val result = lastResult
         val yoloState = if (yoloDetector == null) {
-            val fallback = yoloLoadError.ifBlank {
-                getString(R.string.status_yolo_missing, currentModel.assetName)
-            }
+            val fallback = yoloLoadError.ifBlank { getString(R.string.status_yolo_missing, currentModel.assetName) }
             getString(R.string.status_yolo_error, fallback)
         } else {
             getString(R.string.status_yolo_ok)
@@ -346,7 +388,6 @@ class MainActivity : AppCompatActivity() {
         syncAutoSwitch(controller.autonomous)
     }
 
-
     private fun buildWebHintText(url: String, wifi: String): SpannableString {
         val title = getString(R.string.web_hint, url)
         val wifiText = getString(R.string.wifi_hint, wifi)
@@ -373,9 +414,34 @@ class MainActivity : AppCompatActivity() {
         clipboard.setPrimaryClip(ClipData.newPlainText("web-link", url))
         Toast.makeText(this, getString(R.string.copy_web_link_done), Toast.LENGTH_SHORT).show()
     }
+
+    private fun updateRollingMetrics(markerSeen: Boolean, detections: List<Detection>, command: Char) {
+        pushWindow(markerSeenWindow, markerSeen, 30)
+        val frameAvgConfidence = if (detections.isEmpty()) 0f else detections.map { it.confidence }.average().toFloat()
+        pushWindow(confidenceWindow, frameAvgConfidence, 30)
+        pushWindow(commandWindow, command, 30)
+        lastMarkerSeenRatio = markerSeenWindow.count { it }.toFloat() / markerSeenWindow.size.coerceAtLeast(1)
+        lastAvgConfidence = confidenceWindow.average().toFloat()
+        lastCommandChanges = commandWindow.zipWithNext().count { it.first != it.second }
+    }
+
+    private fun <T> pushWindow(window: ArrayDeque<T>, value: T, maxSize: Int) {
+        window.addLast(value)
+        while (window.size > maxSize) window.removeFirst()
+    }
+
+    /** Ghi nhan ket qua moi khung camera (skip hay xu ly) de tinh ti le skip gan day. */
+    private fun recordFrameOutcome(skipped: Boolean) {
+        pushWindow(frameOutcomeWindow, skipped, FRAME_OUTCOME_WINDOW)
+        val total = frameOutcomeWindow.size.coerceAtLeast(1)
+        lastSkipRatio = frameOutcomeWindow.count { it }.toFloat() / total
+    }
+
     @Suppress("DEPRECATION")
     private fun currentWifiSsid(): String {
-        return try {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastWifiRefreshAt < WIFI_REFRESH_INTERVAL_MS && cachedWifiSsid.isNotBlank()) return cachedWifiSsid
+        cachedWifiSsid = try {
             val wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as? android.net.wifi.WifiManager
             val raw = wifiManager?.connectionInfo?.ssid.orEmpty()
             raw.removePrefix("\"").removeSuffix("\"")
@@ -383,9 +449,14 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
             ""
         }
+        lastWifiRefreshAt = now
+        return cachedWifiSsid
     }
 
     companion object {
-        private const val MIN_INFERENCE_INTERVAL_MS = 16L
+        private const val MIN_INFERENCE_INTERVAL_MS = 90L
+        private const val ARUCO_EVERY_N_FRAMES = 2
+        private const val WIFI_REFRESH_INTERVAL_MS = 2_000L
+        private const val FRAME_OUTCOME_WINDOW = 60
     }
 }

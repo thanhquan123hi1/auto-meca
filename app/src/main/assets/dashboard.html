@@ -115,7 +115,7 @@
       <div class="toolbar">
         <button id="autoToggle" class="primary">Bật Auto</button>
         <button id="stopBtn" class="danger">Dừng xe</button>
-        <label class="inline"><input id="overlayToggle" type="checkbox" checked> Bật khung nhận diện</label>
+        <label class="inline"><input id="overlayToggle" type="checkbox"> Bật khung nhận diện</label>
       </div>
       <div class="video-box">
         <img id="streamImage" alt="Video trực tiếp">
@@ -134,6 +134,18 @@
         <div>UDP</div><div class="value" id="udpValue">OK</div>
         <div>Wi‑Fi</div><div class="value" id="wifiValue">-</div>
         <div>Model</div><div class="value" id="modelValue">-</div>
+      </div>
+
+      <h3 style="margin-top:20px">Debug metrics</h3>
+      <div class="grid">
+        <div>YOLO</div><div class="value" id="yoloMsValue">0 ms</div>
+        <div>ArUco</div><div class="value" id="arucoMsValue">0 ms</div>
+        <div>Pipeline</div><div class="value" id="pipelineMsValue">0 ms</div>
+        <div>Skip frame</div><div class="value" id="skippedFramesValue">0</div>
+        <div>Skip ratio</div><div class="value" id="skipRatioValue">0%</div>
+        <div>Marker seen</div><div class="value" id="markerSeenRatioValue">0%</div>
+        <div>Avg conf</div><div class="value" id="avgConfidenceValue">0%</div>
+        <div>Cmd changes</div><div class="value" id="commandChangesValue">0</div>
       </div>
 
       <h3 style="margin-top:20px">Điều khiển tay</h3>
@@ -171,7 +183,15 @@
       udpValue: document.getElementById('udpValue'),
       wifiValue: document.getElementById('wifiValue'),
       modelValue: document.getElementById('modelValue'),
-      modelButtons: document.getElementById('modelButtons')
+      modelButtons: document.getElementById('modelButtons'),
+      yoloMsValue: document.getElementById('yoloMsValue'),
+      arucoMsValue: document.getElementById('arucoMsValue'),
+      pipelineMsValue: document.getElementById('pipelineMsValue'),
+      skippedFramesValue: document.getElementById('skippedFramesValue'),
+      skipRatioValue: document.getElementById('skipRatioValue'),
+      markerSeenRatioValue: document.getElementById('markerSeenRatioValue'),
+      avgConfidenceValue: document.getElementById('avgConfidenceValue'),
+      commandChangesValue: document.getElementById('commandChangesValue')
     };
 
     let ws;
@@ -196,6 +216,14 @@
       els.udpValue.textContent = next.udpError || 'OK';
       els.wifiValue.textContent = next.connectedWifiSsid || '-';
       els.modelValue.textContent = next.modelName || '-';
+      els.yoloMsValue.textContent = `${Number(next.yoloMs || 0).toFixed(0)} ms`;
+      els.arucoMsValue.textContent = `${Number(next.arucoMs || 0).toFixed(0)} ms`;
+      els.pipelineMsValue.textContent = `${Number(next.pipelineMs || 0).toFixed(0)} ms`;
+      els.skippedFramesValue.textContent = String(next.skippedFrames || 0);
+      els.skipRatioValue.textContent = `${(Number(next.skipRatio || 0) * 100).toFixed(0)}%`;
+      els.markerSeenRatioValue.textContent = `${(Number(next.markerSeenRatio || 0) * 100).toFixed(0)}%`;
+      els.avgConfidenceValue.textContent = `${(Number(next.avgConfidence || 0) * 100).toFixed(0)}%`;
+      els.commandChangesValue.textContent = String(next.commandChanges || 0);
       setAutoButton(!!next.autonomous);
       renderModelButtons(next);
     }

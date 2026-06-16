@@ -40,19 +40,23 @@ class YoloTfliteDetector(
         inputType = inputTensor.dataType()
     }
 
-    fun detect(bitmap: Bitmap): Pair<List<Detection>, Long> {
+    data class DetectionMetrics(val detections: List<Detection>, val inferenceMs: Long, val preprocessMs: Long)
+
+    fun detect(bitmap: Bitmap): DetectionMetrics {
         val startedAt = SystemClock.elapsedRealtimeNanos()
         val scaled = Bitmap.createScaledBitmap(bitmap, inputWidth, inputHeight, true)
         val input = bitmapToInput(scaled)
+        val preprocessMs = (SystemClock.elapsedRealtimeNanos() - startedAt) / 1_000_000
         val outputShape = interpreter.getOutputTensor(0).shape()
 
         val output = Array(outputShape[0]) { Array(outputShape[1]) { FloatArray(outputShape[2]) } }
+        val inferenceStartedAt = SystemClock.elapsedRealtimeNanos()
         interpreter.run(input, output)
 
         val detections = parseOutput(output[0], outputShape, bitmap.width, bitmap.height)
-        val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startedAt) / 1_000_000
+        val inferenceMs = (SystemClock.elapsedRealtimeNanos() - inferenceStartedAt) / 1_000_000
         if (scaled !== bitmap) scaled.recycle()
-        return detections to elapsedMs
+        return DetectionMetrics(detections = detections, inferenceMs = inferenceMs, preprocessMs = preprocessMs)
     }
 
     private fun bitmapToInput(bitmap: Bitmap): ByteBuffer {

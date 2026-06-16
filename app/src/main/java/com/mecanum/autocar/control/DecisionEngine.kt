@@ -230,6 +230,13 @@ class DecisionEngine(
 
     private fun resetTransientState() {
         rotatePhaseCommand = 'S'
+        rotatePhaseStartedAt = 0L
         lastAvoidCommand = 'S'
+        lastAvoidStartedAt = 0L
+        lastMarkerSeenAt = 0L
+        lastMarkerOffset = 0f
+        lastVisibleCommand = 'S'
+        goalReached = false
+        goalReachedAt = 0L
     }
 }

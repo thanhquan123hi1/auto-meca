@@ -1,4 +1,4 @@
-﻿# Hợp đồng tích hợp Android và ESP32-S3
+# Hợp đồng tích hợp Android và ESP32-S3
 
 ## 1. Mục tiêu tài liệu
 Tài liệu này chốt giao thức và trách nhiệm tích hợp giữa:

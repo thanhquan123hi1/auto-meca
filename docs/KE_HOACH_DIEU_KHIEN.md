@@ -1,4 +1,4 @@
-﻿# Kế hoạch thiết kế lại logic điều khiển
+# Kế hoạch thiết kế lại logic điều khiển
 
 ## 1. Mục tiêu thiết kế lại
 Mục tiêu của giai đoạn refactor tiếp theo là làm cho xe:

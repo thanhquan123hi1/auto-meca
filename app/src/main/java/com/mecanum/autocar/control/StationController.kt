@@ -13,6 +13,7 @@ class StationController(
     private val manualTimeoutMs: Long = 900L,
     private val onAutonomousChanged: (Boolean) -> Unit = {},
     private val onActivityChanged: () -> Unit = {},
+    private val onManualCommand: (Char) -> Unit = {},
 ) {
     @Volatile var autonomous: Boolean = false
         private set
@@ -54,6 +55,7 @@ class StationController(
             onAutonomousChanged(false)
         }
         currentCommand = 'S'
+        onManualCommand('S')
         if (changed) onActivityChanged()
     }
 
@@ -64,6 +66,8 @@ class StationController(
         manualOwner = owner
         manualCommand = command
         manualDeadlineMs = now + manualTimeoutMs
+        currentCommand = command
+        onManualCommand(command)
         if (turnedOffAuto) onAutonomousChanged(false)
         onActivityChanged()
     }
@@ -72,6 +76,8 @@ class StationController(
     fun releaseManual(owner: String) {
         if (manualOwner == null || manualOwner == owner) {
             clearManual()
+            currentCommand = 'S'
+            onManualCommand('S')
             onActivityChanged()
         }
     }
@@ -89,6 +95,8 @@ class StationController(
         val cmd = manualCommand ?: return null
         if (now > manualDeadlineMs) {
             clearManual()
+            currentCommand = 'S'
+            onManualCommand('S')
             onActivityChanged()
             return null
         }
