@@ -16,7 +16,7 @@ import kotlin.math.tan
 
 class ArucoGoalDetector(
     private val targetId: Int = 0,
-    private val minArea: Float = 80f,
+    private val minArea: Float = 45f,
     private val markerSizeCm: Float = 10f,
     private val horizontalFovDeg: Float = 60f,
 ) : AutoCloseable {
@@ -27,40 +27,64 @@ class ArucoGoalDetector(
         val dictionary = Objdetect.getPredefinedDictionary(Objdetect.DICT_4X4_1000)
         val parameters = DetectorParameters()
         parameters.set_adaptiveThreshWinSizeMin(3)
-        parameters.set_adaptiveThreshWinSizeMax(53)
+        parameters.set_adaptiveThreshWinSizeMax(63)
         parameters.set_adaptiveThreshWinSizeStep(4)
+        parameters.set_minMarkerPerimeterRate(0.015)
+        parameters.set_maxMarkerPerimeterRate(5.0)
+        parameters.set_polygonalApproxAccuracyRate(0.08)
+        parameters.set_perspectiveRemovePixelPerCell(6)
+        parameters.set_perspectiveRemoveIgnoredMarginPerCell(0.2)
+        parameters.set_errorCorrectionRate(0.75)
+        parameters.set_detectInvertedMarker(true)
         parameters.set_cornerRefinementMethod(Objdetect.CORNER_REFINE_SUBPIX)
+        parameters.set_cornerRefinementWinSize(7)
+        parameters.set_cornerRefinementMaxIterations(50)
         detector = ArucoDetector(dictionary, parameters)
     }
 
     fun detect(bitmap: Bitmap): GoalMarker? {
         val rgba = Mat()
         val gray = Mat()
-        val ids = Mat()
-        val corners = ArrayList<Mat>()
+        val equalized = Mat()
         try {
             Utils.bitmapToMat(bitmap, rgba)
             Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
-            detector.detectMarkers(gray, corners, ids)
-            if (ids.empty()) return null
+            detectInGray(gray, bitmap.width)?.let { return it }
 
-            var best: GoalMarker? = null
-            for (i in 0 until ids.rows()) {
-                val id = ids.get(i, 0)?.firstOrNull()?.toInt() ?: continue
-                if (id != targetId) continue
-                val points = readPoints(corners.getOrNull(i) ?: continue)
-                if (points.size != 4) continue
-                val marker = toMarker(id, points, bitmap.width)
-                if (marker.area < minArea) continue
-                if (best == null || marker.area > best.area) best = marker
-            }
-            return best
+            Imgproc.equalizeHist(gray, equalized)
+            return detectInGray(equalized, bitmap.width)
         } finally {
             rgba.release()
             gray.release()
+            equalized.release()
+        }
+    }
+
+    private fun detectInGray(gray: Mat, frameWidth: Int): GoalMarker? {
+        val ids = Mat()
+        val corners = ArrayList<Mat>()
+        try {
+            detector.detectMarkers(gray, corners, ids)
+            if (ids.empty()) return null
+            return selectBestMarker(ids, corners, frameWidth)
+        } finally {
             ids.release()
             corners.forEach { it.release() }
         }
+    }
+
+    private fun selectBestMarker(ids: Mat, corners: List<Mat>, frameWidth: Int): GoalMarker? {
+        var best: GoalMarker? = null
+        for (i in 0 until ids.rows()) {
+            val id = ids.get(i, 0)?.firstOrNull()?.toInt() ?: continue
+            if (id != targetId) continue
+            val points = readPoints(corners.getOrNull(i) ?: continue)
+            if (points.size != 4) continue
+            val marker = toMarker(id, points, frameWidth)
+            if (marker.area < minArea) continue
+            if (best == null || marker.area > best.area) best = marker
+        }
+        return best
     }
 
     private fun readPoints(mat: Mat): List<Point> {

@@ -15,7 +15,7 @@
     }
     .page {
       display: grid;
-      grid-template-columns: minmax(320px, 1.5fr) minmax(300px, 420px);
+      grid-template-columns: minmax(320px, 1.45fr) minmax(320px, 460px);
       gap: 16px;
       padding: 16px;
       min-height: 100vh;
@@ -28,6 +28,24 @@
       box-shadow: 0 8px 30px rgba(0,0,0,.18);
     }
     h1, h2, h3 { margin: 0 0 12px; }
+    .team-banner {
+      margin-bottom: 16px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      border: 1px solid #2e414d;
+      background: linear-gradient(135deg, rgba(87,217,154,.18), rgba(32,51,64,.95));
+    }
+    .team-banner h2 {
+      font-size: 18px;
+      margin-bottom: 8px;
+      color: #d8fff0;
+    }
+    .team-banner ul {
+      margin: 0;
+      padding-left: 18px;
+      color: #edf7f4;
+      line-height: 1.65;
+    }
     .video-box {
       background: #06090c;
       border-radius: 12px;
@@ -49,7 +67,7 @@
     .muted { color: #9eb4af; }
     .grid {
       display: grid;
-      grid-template-columns: 160px 1fr;
+      grid-template-columns: 165px 1fr;
       gap: 8px 12px;
       align-items: start;
     }
@@ -64,6 +82,7 @@
     }
     .on { background: #57d99a; color: #06100d; }
     .off { background: #49545c; color: #edf7f4; }
+    .warn { background: #ffcf66; color: #241400; }
     .controls, .models {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -111,6 +130,15 @@
 <body>
   <main class="page">
     <section class="card">
+      <div class="team-banner">
+        <h2>Nhóm thực hiện</h2>
+        <ul>
+          <li>Phùng Lê Thanh Quân - MSSV: 23110145</li>
+          <li>Vũ Minh Đức - MSSV: 23110094</li>
+          <li>Đặng Gia Nguyên - MSSV: 23110136</li>
+        </ul>
+      </div>
+
       <h1>Trạm thị giác Mecanum</h1>
       <div class="toolbar">
         <button id="autoToggle" class="primary">Bật Auto</button>
@@ -130,6 +158,9 @@
         <div>Lệnh hiện tại</div><div class="value" id="commandValue">S</div>
         <div>Lý do</div><div class="value" id="reasonValue">idle</div>
         <div>Khoảng cách marker</div><div class="value" id="distanceValue">-</div>
+        <div>Khoảng cách đầu xe</div><div class="value" id="frontDistanceValue">-</div>
+        <div>Telemetry HC-SR04</div><div><span id="telemetryState" class="badge off">Stale</span></div>
+        <div>Guard ESP32</div><div><span id="guardState" class="badge off">OFF</span></div>
         <div>AI FPS</div><div class="value" id="fpsValue">0.0</div>
         <div>UDP</div><div class="value" id="udpValue">OK</div>
         <div>Wi‑Fi</div><div class="value" id="wifiValue">-</div>
@@ -179,6 +210,9 @@
       commandValue: document.getElementById('commandValue'),
       reasonValue: document.getElementById('reasonValue'),
       distanceValue: document.getElementById('distanceValue'),
+      frontDistanceValue: document.getElementById('frontDistanceValue'),
+      telemetryState: document.getElementById('telemetryState'),
+      guardState: document.getElementById('guardState'),
       fpsValue: document.getElementById('fpsValue'),
       udpValue: document.getElementById('udpValue'),
       wifiValue: document.getElementById('wifiValue'),
@@ -205,13 +239,20 @@
       els.autoToggle.classList.toggle('primary', !autoEnabled);
     }
 
+    function setBadge(el, text, stateClass) {
+      el.textContent = text;
+      el.className = 'badge ' + stateClass;
+    }
+
     function renderStatus(next) {
       status = next;
-      els.autoState.textContent = next.autonomous ? 'Bật' : 'Tắt';
-      els.autoState.className = 'badge ' + (next.autonomous ? 'on' : 'off');
+      setBadge(els.autoState, next.autonomous ? 'Bật' : 'Tắt', next.autonomous ? 'on' : 'off');
       els.commandValue.textContent = next.command || 'S';
       els.reasonValue.textContent = next.reason || 'idle';
       els.distanceValue.textContent = next.markerDistanceCm == null ? '-' : `${Number(next.markerDistanceCm).toFixed(1)} cm`;
+      els.frontDistanceValue.textContent = next.frontDistanceCm == null ? '-' : `${Number(next.frontDistanceCm).toFixed(1)} cm`;
+      setBadge(els.telemetryState, next.frontTelemetryFresh ? 'OK' : 'Stale', next.frontTelemetryFresh ? 'on' : 'warn');
+      setBadge(els.guardState, next.guardActive ? 'ON' : 'OFF', next.guardActive ? 'warn' : 'off');
       els.fpsValue.textContent = Number(next.aiFps || 0).toFixed(1);
       els.udpValue.textContent = next.udpError || 'OK';
       els.wifiValue.textContent = next.connectedWifiSsid || '-';

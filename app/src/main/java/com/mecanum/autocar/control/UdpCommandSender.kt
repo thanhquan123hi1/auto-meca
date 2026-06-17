@@ -28,6 +28,7 @@ class UdpCommandSender(
 
     fun start() {
         active = true
+        ensureSocket()
         if (task == null || task?.isCancelled == true || task?.isDone == true) {
             task = executor.scheduleAtFixedRate(::tick, 0L, intervalMs, TimeUnit.MILLISECONDS)
         }
@@ -52,18 +53,24 @@ class UdpCommandSender(
         socket = null
     }
 
+    fun localPort(): Int? = socket?.localPort
+
     private fun tick() {
         if (!active) return
         sendNow(lastCommand)
     }
 
+    private fun ensureSocket(): DatagramSocket {
+        return socket ?: DatagramSocket(COMMAND_LOCAL_PORT).also {
+            it.broadcast = false
+            socket = it
+        }
+    }
+
     private fun sendNow(command: Char) {
         try {
             val targetAddress = address ?: InetAddress.getByName(host).also { address = it }
-            val datagramSocket = socket ?: DatagramSocket().also {
-                it.broadcast = false
-                socket = it
-            }
+            val datagramSocket = ensureSocket()
             val payload = byteArrayOf(normalize(command).code.toByte())
             val packet = DatagramPacket(payload, payload.size, targetAddress, port)
             datagramSocket.send(packet)
@@ -80,6 +87,9 @@ class UdpCommandSender(
     }
 
     companion object {
+        const val COMMAND_LOCAL_PORT = 4210
+        const val TELEMETRY_PORT = COMMAND_LOCAL_PORT + 1
+
         private const val TAG = "UdpCommandSender"
         private val VALID_COMMANDS = setOf('F', 'B', 'L', 'R', 'Q', 'E', 'G', 'H', 'J', 'K', 'S')
     }

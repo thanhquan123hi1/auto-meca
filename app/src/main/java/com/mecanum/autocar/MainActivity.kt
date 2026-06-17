@@ -22,9 +22,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
-import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -38,6 +38,7 @@ import com.mecanum.autocar.ai.toBitmapRotated
 import com.mecanum.autocar.control.DecisionEngine
 import com.mecanum.autocar.control.StationController
 import com.mecanum.autocar.control.UdpCommandSender
+import com.mecanum.autocar.control.UdpTelemetryReceiver
 import com.mecanum.autocar.web.StationStatus
 import com.mecanum.autocar.web.WebControlServer
 import java.util.ArrayDeque
@@ -59,6 +60,7 @@ class MainActivity : AppCompatActivity() {
     private val decisionEngine = DecisionEngine()
     private val udpSender = UdpCommandSender()
     private val detectorLock = Any()
+    private var telemetryReceiver: UdpTelemetryReceiver? = null
 
     private val controller = StationController(
         onAutonomousChanged = { enabled ->
@@ -90,6 +92,7 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var lastAvgConfidence = 0f
     @Volatile private var lastSkipRatio = 0f
     @Volatile private var lastMarker: GoalMarker? = null
+    @Volatile private var lastMarkerDetectedAtMs = 0L
 
     private var yoloDetector: YoloTfliteDetector? = null
     private var arucoDetector: ArucoGoalDetector? = null
@@ -125,6 +128,7 @@ class MainActivity : AppCompatActivity() {
 
         initDetectors()
         startWebServer()
+        startTelemetryReceiver()
         ensureCameraPermission()
         updateStatus()
     }
@@ -133,6 +137,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         controller.setAutonomous(false)
         udpSender.shutdown()
+        telemetryReceiver?.stop()
         webServer?.stopServer()
         yoloDetector?.close()
         arucoDetector?.close()
@@ -147,6 +152,13 @@ class MainActivity : AppCompatActivity() {
             arucoLoadError = error.message ?: error.javaClass.simpleName
             controller.arucoError = arucoLoadError
         }
+    }
+
+    private fun startTelemetryReceiver() {
+        if (telemetryReceiver != null) return
+        telemetryReceiver = UdpTelemetryReceiver(UdpCommandSender.TELEMETRY_PORT) { distanceCm, guardActive ->
+            controller.applyFrontTelemetry(distanceCm, guardActive, System.currentTimeMillis())
+        }.also { it.start() }
     }
 
     private fun startWebServer() {
@@ -171,6 +183,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun currentStatus(): StationStatus {
+        val now = System.currentTimeMillis()
         return StationStatus(
             autonomous = controller.autonomous,
             command = controller.currentCommand,
@@ -192,6 +205,9 @@ class MainActivity : AppCompatActivity() {
             avgConfidence = lastAvgConfidence,
             skipRatio = lastSkipRatio,
             commandChanges = lastCommandChanges,
+            frontDistanceCm = controller.freshFrontDistance(now),
+            frontTelemetryFresh = controller.isFrontTelemetryFresh(now),
+            guardActive = controller.guardActive,
         )
     }
 
@@ -281,9 +297,9 @@ class MainActivity : AppCompatActivity() {
             frameCounter += 1
             val shouldRunAruco = frameCounter % ARUCO_EVERY_N_FRAMES == 0
             val markerStartedAt = SystemClock.elapsedRealtimeNanos()
-            val detectedMarker: GoalMarker? = if (shouldRunAruco) arucoDetector?.detect(bitmap) else lastMarker
+            val rawMarker: GoalMarker? = if (shouldRunAruco) arucoDetector?.detect(bitmap) else null
             val arucoMs = if (shouldRunAruco) (SystemClock.elapsedRealtimeNanos() - markerStartedAt) / 1_000_000 else 0L
-            lastMarker = detectedMarker
+            val detectedMarker = stabilizeMarker(rawMarker, now)
 
             if (yoloMs > 0L) {
                 val instantFps = 1000f / yoloMs.coerceAtLeast(1L)
@@ -297,6 +313,7 @@ class MainActivity : AppCompatActivity() {
                 detections = detections,
                 marker = detectedMarker,
                 autonomous = controller.autonomous,
+                frontDistanceCm = controller.freshFrontDistance(System.currentTimeMillis()),
             )
             controller.currentCommand = command
             controller.reason = if (manualCommand != null) "Điều khiển tay từ web" else decisionEngine.lastReason
@@ -350,6 +367,22 @@ class MainActivity : AppCompatActivity() {
         autoToggleButton.setTextColor(android.graphics.Color.parseColor(if (enabled) "#06100D" else "#F2F7F5"))
     }
 
+    private fun stabilizeMarker(rawMarker: GoalMarker?, nowMs: Long): GoalMarker? {
+        if (rawMarker != null) {
+            lastMarker = rawMarker
+            lastMarkerDetectedAtMs = nowMs
+            return rawMarker
+        }
+
+        val cached = lastMarker
+        if (cached != null && nowMs - lastMarkerDetectedAtMs <= MARKER_HOLD_MS) {
+            return cached
+        }
+
+        lastMarker = null
+        return null
+    }
+
     private fun updateStatus() {
         val result = lastResult
         val yoloState = if (yoloDetector == null) {
@@ -368,6 +401,9 @@ class MainActivity : AppCompatActivity() {
         val fpsText = String.format(Locale.US, "%.1f", controller.aiFps)
         val distanceText = controller.markerDistanceCm?.let { String.format(Locale.US, "%.1f cm", it) }
             ?: getString(R.string.status_distance_unknown)
+        val frontDistanceText = controller.freshFrontDistance(System.currentTimeMillis())?.let { String.format(Locale.US, "%.1f cm", it) }
+            ?: getString(R.string.status_distance_unknown)
+        val guardText = if (controller.guardActive) "ON" else "OFF"
 
         statusText.text = buildString {
             appendLine(if (controller.autonomous) getString(R.string.status_auto_on) else getString(R.string.status_auto_off))
@@ -376,6 +412,7 @@ class MainActivity : AppCompatActivity() {
             appendLine(getString(R.string.status_reason, controller.reason))
             appendLine(getString(R.string.status_objects_marker, result?.detections?.size ?: 0, markerText))
             appendLine(getString(R.string.status_marker_distance, distanceText))
+            appendLine(getString(R.string.status_front_distance, frontDistanceText, guardText))
             appendLine(getString(R.string.status_udp, udpState))
             appendLine(yoloState)
             append(arucoState)
@@ -430,7 +467,6 @@ class MainActivity : AppCompatActivity() {
         while (window.size > maxSize) window.removeFirst()
     }
 
-    /** Ghi nhan ket qua moi khung camera (skip hay xu ly) de tinh ti le skip gan day. */
     private fun recordFrameOutcome(skipped: Boolean) {
         pushWindow(frameOutcomeWindow, skipped, FRAME_OUTCOME_WINDOW)
         val total = frameOutcomeWindow.size.coerceAtLeast(1)
@@ -455,7 +491,8 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val MIN_INFERENCE_INTERVAL_MS = 90L
-        private const val ARUCO_EVERY_N_FRAMES = 2
+        private const val ARUCO_EVERY_N_FRAMES = 1
+        private const val MARKER_HOLD_MS = 900L
         private const val WIFI_REFRESH_INTERVAL_MS = 2_000L
         private const val FRAME_OUTCOME_WINDOW = 60
     }

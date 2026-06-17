@@ -537,6 +537,34 @@ Likely thermal throttling or NNAPI behavior. Compare models from the web page.
 Both phone and laptop must be connected to the ESP32 AP. The web page is hosted
 by the phone, not the ESP32 and not a laptop server.
 
+If the laptop cannot join the ESP32 WiFi at all while the phone can, check the
+firmware AP settings first:
+
+- `WIFI_AP_MAX_CLIENTS` should allow at least `2` clients.
+- Use 2.4 GHz channel `1`, `6`, or `11`; ESP32 SoftAP is 2.4 GHz only.
+- Keep WPA2 password length at 8+ characters.
+- On Windows, choose to stay connected even if the network has no Internet.
+- Watch the ESP32 serial log for `AP clients:` to confirm whether the laptop
+  actually joined the AP.
+
+When the laptop is connected, open the exact URL shown in the Android app. On
+the default ESP32 AP it should usually be:
+
+```text
+http://192.168.4.<phone-client-ip>:8088
+```
+
+The Android app now prefers a `192.168.4.x` address when showing the dashboard
+URL so the laptop does not accidentally try a cellular/USB interface IP.
+
+### ArUco marker flickers or is lost often
+
+Print marker ID `0` large enough, flat, high contrast, and with a white border.
+Avoid glare from glossy paper. The app runs ArUco every processed frame, tries
+both raw grayscale and equalized grayscale detection, and keeps a short marker
+hold plus a longer direction memory so the car searches from the last known
+marker side before doing a wide sweep.
+
 ### Car keeps moving after Stop
 
 Firmware failsafe is not strict enough. Firmware must stop if no valid command

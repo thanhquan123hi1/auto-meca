@@ -39,15 +39,11 @@ data class StationStatus(
     val avgConfidence: Float,
     val skipRatio: Float,
     val commandChanges: Int,
+    val frontDistanceCm: Float?,
+    val frontTelemetryFresh: Boolean,
+    val guardActive: Boolean,
 )
 
-/**
- * May chu tich hop trong app: phuc vu dashboard HTML, REST dieu khien va WebSocket /ws.
- * - HTTP: GET /, GET /status.json, POST /api/...
- * - WebSocket /ws: nhan lenh tay (giu/nha), gui status realtime va khung JPEG.
- *
- * Uu tien tai nguyen cho AI/dieu khien: chi sao chep va ma hoa JPEG khi co client xem.
- */
 class WebControlServer(
     private val context: Context,
     private val port: Int = 8088,
@@ -64,8 +60,6 @@ class WebControlServer(
 
     private val clients = CopyOnWriteArraySet<DashboardSocket>()
     private val clientIds = AtomicInteger(0)
-
-    // Khung moi nhat (chi giu khi co client). Truy cap duoi khoa frameLock.
     private val frameLock = Any()
     private var latestRaw: Bitmap? = null
     private var latestResult: VisionResult? = null
@@ -103,13 +97,8 @@ class WebControlServer(
         }
     }
 
-    /** Co client nao dang xem stream khong. */
     private fun hasViewers(): Boolean = clients.isNotEmpty()
 
-    /**
-     * MainActivity goi moi khung sau khi xu ly AI. Chi sao chep khi co nguoi xem
-     * de khong lam cham pipeline AI. Bitmap nguon van thuoc ve nguoi goi.
-     */
     fun submitFrame(bitmap: Bitmap, result: VisionResult) {
         if (!streaming || !hasViewers()) return
         val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return
@@ -123,9 +112,7 @@ class WebControlServer(
         }
     }
 
-    override fun openWebSocket(handshake: IHTTPSession): WebSocket {
-        return DashboardSocket(handshake)
-    }
+    override fun openWebSocket(handshake: IHTTPSession): WebSocket = DashboardSocket(handshake)
 
     override fun serveHttp(session: IHTTPSession): Response {
         val uri = session.uri ?: "/"
@@ -151,12 +138,10 @@ class WebControlServer(
 
     private fun serveDashboard(): Response {
         val html = context.assets.open("dashboard.html").bufferedReader(Charsets.UTF_8).use { it.readText() }
-        val response = newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html)
-        return response
+        return newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html)
     }
 
-    private fun okResponse(): Response =
-        jsonResponse("{\"ok\":true}")
+    private fun okResponse(): Response = jsonResponse("{\"ok\":true}")
 
     private fun jsonResponse(json: String): Response {
         val response = newFixedLengthResponse(Response.Status.OK, "application/json; charset=utf-8", json)
@@ -168,11 +153,7 @@ class WebControlServer(
         val frameIntervalMs = (1000L / targetStreamFps.coerceIn(1, 30)).coerceAtLeast(1L)
         while (streaming) {
             val start = System.currentTimeMillis()
-            try {
-                broadcastFrame()
-            } catch (error: Exception) {
-                Log.w(TAG, "stream error", error)
-            }
+            try { broadcastFrame() } catch (error: Exception) { Log.w(TAG, "stream error", error) }
             val elapsed = System.currentTimeMillis() - start
             val sleep = frameIntervalMs - elapsed
             if (sleep > 0) Thread.sleep(sleep)
@@ -192,7 +173,6 @@ class WebControlServer(
             frameDirty = false
         }
 
-        // Nhom client theo che do overlay de ma hoa nhieu nhat 2 lan moi khung.
         val wantOverlay = clients.any { it.overlayEnabled }
         val wantPlain = clients.any { !it.overlayEnabled }
 
@@ -203,9 +183,7 @@ class WebControlServer(
             overlayJpeg = encodeJpeg(rendered)
             rendered.recycle()
         }
-        if (wantPlain) {
-            plainJpeg = encodeJpeg(raw)
-        }
+        if (wantPlain) plainJpeg = encodeJpeg(raw)
         raw.recycle()
 
         for (client in clients) {
@@ -247,6 +225,9 @@ class WebControlServer(
         sb.append("\"udpError\":\"").append(jsonEscape(s.udpError)).append("\",")
         sb.append("\"markerId\":").append(s.markerId?.toString() ?: "null").append(",")
         sb.append("\"markerDistanceCm\":").append(s.markerDistanceCm?.let { String.format(Locale.US, "%.1f", it) } ?: "null").append(",")
+        sb.append("\"frontDistanceCm\":").append(s.frontDistanceCm?.let { String.format(Locale.US, "%.1f", it) } ?: "null").append(",")
+        sb.append("\"frontTelemetryFresh\":").append(s.frontTelemetryFresh).append(",")
+        sb.append("\"guardActive\":").append(s.guardActive).append(",")
         sb.append("\"detectionCount\":").append(s.detectionCount).append(",")
         sb.append("\"connectedWifiSsid\":\"").append(jsonEscape(s.connectedWifiSsid)).append("\",")
         sb.append("\"yoloMs\":").append(s.yoloMs).append(",")
@@ -272,18 +253,14 @@ class WebControlServer(
 
         override fun onOpen() {
             if (clients.size >= maxClients) {
-                try {
-                    close(WebSocketFrame.CloseCode.PolicyViolation, "Qua nhieu client", false)
-                } catch (_: IOException) {
-                }
+                try { close(WebSocketFrame.CloseCode.PolicyViolation, "Qua nhieu client", false) } catch (_: IOException) {}
                 return
             }
             clients.add(this)
             try {
                 cachedStatusJson = buildStatusJson(statusProvider())
                 sendText("{\"type\":\"status\",\"payload\":" + cachedStatusJson + "}")
-            } catch (_: Exception) {
-            }
+            } catch (_: Exception) {}
         }
 
         override fun onClose(code: WebSocketFrame.CloseCode?, reason: String?, initiatedByRemote: Boolean) {
@@ -297,25 +274,14 @@ class WebControlServer(
         }
 
         override fun onPong(pong: WebSocketFrame) {}
-
-        override fun onException(exception: IOException) {
-            Log.w(TAG, "ws exception", exception)
-        }
+        override fun onException(exception: IOException) { Log.w(TAG, "ws exception", exception) }
 
         fun sendFrame(bytes: ByteArray) {
-            try {
-                send(bytes)
-            } catch (_: Exception) {
-                clients.remove(this)
-            }
+            try { send(bytes) } catch (_: Exception) { clients.remove(this) }
         }
 
         fun sendText(text: String) {
-            try {
-                send(text)
-            } catch (_: Exception) {
-                clients.remove(this)
-            }
+            try { send(text) } catch (_: Exception) { clients.remove(this) }
         }
     }
 
@@ -331,9 +297,7 @@ class WebControlServer(
                 controller.releaseManual(socket.id)
                 cachedStatusJson = buildStatusJson(statusProvider())
             }
-            "overlay" -> {
-                socket.overlayEnabled = text.contains("\"enabled\":true")
-            }
+            "overlay" -> socket.overlayEnabled = text.contains("\"enabled\":true")
         }
     }
 
@@ -362,11 +326,16 @@ class WebControlServer(
         private const val SOCKET_READ_TIMEOUT = 10000
 
         fun localIpv4Address(): String? {
-            return NetworkInterface.getNetworkInterfaces().asSequence()
+            val addresses = NetworkInterface.getNetworkInterfaces().asSequence()
                 .flatMap { it.inetAddresses.asSequence() }
                 .filterIsInstance<Inet4Address>()
-                .firstOrNull { !it.isLoopbackAddress }
-                ?.hostAddress
+                .filter { !it.isLoopbackAddress }
+                .map { it.hostAddress }
+                .filterNotNull()
+                .toList()
+            return addresses.firstOrNull { it.startsWith("192.168.4.") }
+                ?: addresses.firstOrNull { it.startsWith("192.168.") || it.startsWith("10.") || it.startsWith("172.") }
+                ?: addresses.firstOrNull()
         }
     }
 }

@@ -11,6 +11,7 @@
     <string name="status_reason">Lý do: %1$s</string>
     <string name="status_objects_marker">Vật cản: %1$d   Marker: %2$s</string>
     <string name="status_marker_distance">Khoảng cách marker: %1$s</string>
+    <string name="status_front_distance">Khoảng cách trước xe: %1$s   Guard: %2$s</string>
     <string name="status_distance_unknown">-</string>
     <string name="status_udp">UDP: %1$s</string>
     <string name="status_yolo_ok">YOLO: OK</string>

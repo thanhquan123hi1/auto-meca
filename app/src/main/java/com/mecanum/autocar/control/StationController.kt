@@ -11,6 +11,7 @@ import com.mecanum.autocar.ai.GoalMarker
  */
 class StationController(
     private val manualTimeoutMs: Long = 900L,
+    private val telemetryFreshMs: Long = 500L,
     private val onAutonomousChanged: (Boolean) -> Unit = {},
     private val onActivityChanged: () -> Unit = {},
     private val onManualCommand: (Char) -> Unit = {},
@@ -34,6 +35,12 @@ class StationController(
     @Volatile var modelName: String = ""
     @Volatile var yoloError: String = ""
     @Volatile var arucoError: String = ""
+    @Volatile var frontDistanceCm: Float? = null
+        private set
+    @Volatile var frontDistanceUpdatedAt: Long = 0L
+        private set
+    @Volatile var guardActive: Boolean = false
+        private set
 
     val manualActive: Boolean get() = manualCommand != null
 
@@ -110,4 +117,19 @@ class StationController(
         markerId = marker?.id
         markerDistanceCm = marker?.distanceCm
     }
+
+    fun applyFrontTelemetry(distanceCm: Float?, guard: Boolean, now: Long) {
+        frontDistanceCm = distanceCm
+        frontDistanceUpdatedAt = now
+        guardActive = guard
+        onActivityChanged()
+    }
+
+    fun freshFrontDistance(now: Long): Float? {
+        val distance = frontDistanceCm ?: return null
+        if (frontDistanceUpdatedAt <= 0L) return null
+        return if (now - frontDistanceUpdatedAt <= telemetryFreshMs) distance else null
+    }
+
+    fun isFrontTelemetryFresh(now: Long): Boolean = freshFrontDistance(now) != null
 }
