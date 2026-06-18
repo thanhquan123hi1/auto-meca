@@ -27,11 +27,19 @@ class YoloTfliteDetector(
     private val inputType: DataType
 
     init {
-        val options = Interpreter.Options().apply {
+        val model = loadModel(context, modelAssetName)
+        val cpuOptions = Interpreter.Options().apply {
             setNumThreads(4)
-            setUseNNAPI(true)
+            setUseNNAPI(false)
         }
-        interpreter = Interpreter(loadModel(context, modelAssetName), options)
+        interpreter = try {
+            Interpreter(model, Interpreter.Options().apply {
+                setNumThreads(4)
+                setUseNNAPI(true)
+            })
+        } catch (_: Throwable) {
+            Interpreter(model, cpuOptions)
+        }
 
         val inputTensor = interpreter.getInputTensor(0)
         val inputShape = inputTensor.shape()

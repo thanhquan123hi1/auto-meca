@@ -23,7 +23,7 @@ class ArucoGoalDetector(
     private val detector: ArucoDetector
 
     init {
-        OpenCVLoader.initDebug()
+        check(OpenCVLoader.initDebug()) { "Kh?ng th? kh?i t?o OpenCV native" }
         val dictionary = Objdetect.getPredefinedDictionary(Objdetect.DICT_4X4_1000)
         val parameters = DetectorParameters()
         parameters.set_adaptiveThreshWinSizeMin(3)

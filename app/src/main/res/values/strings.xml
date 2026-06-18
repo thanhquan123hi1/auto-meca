@@ -20,8 +20,8 @@
     <string name="status_aruco_ok">ArUco: OK</string>
     <string name="status_aruco_error">ArUco lỗi: %1$s</string>
     <string name="status_unknown_marker">-</string>
-    <string name="web_hint">Điều khiển web:\n%1$s</string>
-    <string name="wifi_hint">Wi‑Fi hiện tại: %1$s</string>
+    <string name="web_hint">Điều khiển web:&#10;%1$s</string>
+    <string name="wifi_hint">Wi-Fi hiện tại: %1$s</string>
     <string name="wifi_unknown">không xác định</string>
     <string name="udp_ok">OK</string>
     <string name="web_starting">đang khởi động...</string>
