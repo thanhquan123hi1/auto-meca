@@ -41,6 +41,7 @@ import com.mecanum.autocar.control.UdpCommandSender
 import com.mecanum.autocar.control.UdpTelemetryReceiver
 import com.mecanum.autocar.web.StationStatus
 import com.mecanum.autocar.web.WebControlServer
+import com.mecanum.autocar.web.WebRtcStreamer
 import java.util.ArrayDeque
 import java.util.Locale
 import java.util.concurrent.ExecutorService
@@ -97,6 +98,7 @@ class MainActivity : AppCompatActivity() {
     private var yoloDetector: YoloTfliteDetector? = null
     private var arucoDetector: ArucoGoalDetector? = null
     private var webServer: WebControlServer? = null
+    private var webRtcStreamer: WebRtcStreamer? = null
     private var lastInferenceAt = 0L
     private var frameCounter = 0
     private var skippedFrames = 0
@@ -126,10 +128,10 @@ class MainActivity : AppCompatActivity() {
         syncAutoSwitch(false)
         copyWebButton.setOnClickListener { copyWebUrlToClipboard() }
 
-        initDetectors()
-        startWebServer()
-        startTelemetryReceiver()
-        ensureCameraPermission()
+        safeInit("detectors") { initDetectors() }
+        safeInit("web_server") { startWebServer() }
+        safeInit("telemetry") { startTelemetryReceiver() }
+        safeInit("camera_permission") { ensureCameraPermission() }
         updateStatus()
     }
 
@@ -138,6 +140,7 @@ class MainActivity : AppCompatActivity() {
         controller.setAutonomous(false)
         udpSender.shutdown()
         telemetryReceiver?.stop()
+        webRtcStreamer?.stop()
         webServer?.stopServer()
         yoloDetector?.close()
         arucoDetector?.close()
@@ -179,7 +182,22 @@ class MainActivity : AppCompatActivity() {
                 loadYoloModel(DetectorModel.byId(modelId))
                 runOnUiThread { updateStatus() }
             },
-        ).also { it.startServer() }
+            onWebRtcSignal = { clientId, message ->
+                webRtcStreamer?.handleSignal(clientId, message)
+            },
+        ).also {
+            it.startServer()
+            logModule("web_server", "started", detail = it.url)
+        }
+        webRtcStreamer = try {
+            WebRtcStreamer(applicationContext, webServer!!).also {
+                it.start()
+                logModule("webrtc", "started")
+            }
+        } catch (error: Throwable) {
+            logModule("webrtc", "start_error", error)
+            null
+        }
     }
 
     private fun currentStatus(): StationStatus {
@@ -345,7 +363,7 @@ class MainActivity : AppCompatActivity() {
             )
             lastResult = visionResult
             overlayView.update(visionResult)
-            webServer?.submitFrame(bitmap, visionResult)
+            webRtcStreamer?.pushFrame(bitmap)
             bitmap.recycle()
 
             runOnUiThread { updateStatus() }
@@ -356,6 +374,34 @@ class MainActivity : AppCompatActivity() {
         } finally {
             processing.set(false)
             image.close()
+        }
+    }
+
+    private inline fun safeInit(module: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (error: Exception) {
+            logModule(module, "init_error", error)
+            when (module) {
+                "detectors" -> {
+                    val detail = error.message ?: error.javaClass.simpleName
+                    yoloLoadError = detail
+                    controller.yoloError = detail
+                }
+                "web_server" -> controller.udpError = "Web l?i: ${error.message ?: error.javaClass.simpleName}"
+            }
+        }
+    }
+
+    private fun logModule(module: String, event: String, error: Throwable? = null, detail: String = "") {
+        val suffix = buildString {
+            if (detail.isNotBlank()) append(" detail=").append(detail)
+            error?.message?.takeIf { it.isNotBlank() }?.let { append(" error=").append(it) }
+        }
+        if (error != null) {
+            android.util.Log.e(TAG, "[$module] $event$suffix", error)
+        } else {
+            android.util.Log.i(TAG, "[$module] $event$suffix")
         }
     }
 
@@ -495,5 +541,6 @@ class MainActivity : AppCompatActivity() {
         private const val MARKER_HOLD_MS = 900L
         private const val WIFI_REFRESH_INTERVAL_MS = 2_000L
         private const val FRAME_OUTCOME_WINDOW = 60
+        private const val TAG = "MainActivity"
     }
 }

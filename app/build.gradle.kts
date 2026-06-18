@@ -54,4 +54,5 @@ dependencies {
     implementation("org.opencv:opencv:4.10.0")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
+    implementation("io.github.webrtc-sdk:android:125.6422.06")
 }

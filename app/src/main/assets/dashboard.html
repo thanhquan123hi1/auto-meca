@@ -5,197 +5,258 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Trạm thị giác Mecanum</title>
   <style>
-    :root { color-scheme: dark; }
+    :root {
+      color-scheme: light;
+      --bg: #f7fbf8;
+      --card: #ffffff;
+      --card-2: #f1faf5;
+      --text: #1f2a24;
+      --muted: #62766b;
+      --line: #dcebe2;
+      --primary: #6fd7a3;
+      --danger: #ff8d8d;
+      --warn: #ffd97a;
+      --shadow: 0 10px 30px rgba(54, 84, 67, 0.10);
+    }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
-      background: #0b1014;
-      color: #edf7f4;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      background: radial-gradient(circle at top, #ffffff 0, var(--bg) 45%, #eef7f0 100%);
+      color: var(--text);
     }
-    .page {
+    main {
       display: grid;
-      grid-template-columns: minmax(320px, 1.45fr) minmax(320px, 460px);
+      grid-template-columns: minmax(340px, 1.35fr) minmax(320px, 0.95fr);
       gap: 16px;
       padding: 16px;
       min-height: 100vh;
     }
     .card {
-      background: #151d23;
-      border: 1px solid #29343c;
-      border-radius: 12px;
-      padding: 16px;
-      box-shadow: 0 8px 30px rgba(0,0,0,.18);
-    }
-    h1, h2, h3 { margin: 0 0 12px; }
-    .team-banner {
-      margin-bottom: 16px;
-      padding: 14px 16px;
-      border-radius: 12px;
-      border: 1px solid #2e414d;
-      background: linear-gradient(135deg, rgba(87,217,154,.18), rgba(32,51,64,.95));
-    }
-    .team-banner h2 {
-      font-size: 18px;
-      margin-bottom: 8px;
-      color: #d8fff0;
-    }
-    .team-banner ul {
-      margin: 0;
-      padding-left: 18px;
-      color: #edf7f4;
-      line-height: 1.65;
-    }
-    .video-box {
-      background: #06090c;
-      border-radius: 12px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      box-shadow: var(--shadow);
       overflow: hidden;
-      border: 1px solid #22303a;
-      aspect-ratio: 4 / 3;
+    }
+    .hero {
+      padding: 18px;
+      background: linear-gradient(135deg, #ffffff 0%, #eefbf2 100%);
+      border-bottom: 1px solid var(--line);
+    }
+    .title {
       display: flex;
       align-items: center;
-      justify-content: center;
-      position: relative;
-    }
-    #streamImage {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      display: block;
-      background: #000;
-    }
-    .muted { color: #9eb4af; }
-    .grid {
-      display: grid;
-      grid-template-columns: 165px 1fr;
-      gap: 8px 12px;
-      align-items: start;
-    }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      font-weight: 700;
-      font-size: 13px;
-    }
-    .on { background: #57d99a; color: #06100d; }
-    .off { background: #49545c; color: #edf7f4; }
-    .warn { background: #ffcf66; color: #241400; }
-    .controls, .models {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-    }
-    .toolbar {
-      display: flex;
+      justify-content: space-between;
+      gap: 12px;
       flex-wrap: wrap;
-      gap: 10px;
-      margin-bottom: 12px;
     }
-    button {
-      border: 0;
-      border-radius: 10px;
-      padding: 12px 14px;
-      font-weight: 700;
-      background: #26323a;
-      color: #edf7f4;
-      cursor: pointer;
-      min-height: 48px;
-    }
-    button.primary { background: #57d99a; color: #06100d; }
-    button.danger { background: #ff6b6b; color: #210707; }
-    button.active { outline: 2px solid #8ee6bd; }
-    button:disabled { opacity: .45; cursor: not-allowed; }
-    .controls .wide { grid-column: span 3; }
-    .controls .span2 { grid-column: span 2; }
-    label.inline {
+    h1, h2, h3 { margin: 0; }
+    h1 { font-size: 24px; }
+    .subtitle { color: var(--muted); margin-top: 6px; line-height: 1.45; }
+    .pill {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      font-weight: 600;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: #edf9f1;
+      border: 1px solid #d8ecde;
+      font-weight: 700;
+      color: #2d6148;
+      font-size: 13px;
     }
-    code, .value {
-      background: #0b1014;
-      border-radius: 6px;
-      padding: 2px 6px;
+    .content { padding: 16px; }
+    .video-shell {
+      background: #0f1512;
+      border-radius: 18px;
+      border: 1px solid #24342b;
+      overflow: hidden;
+      aspect-ratio: 16 / 9;
+      display: grid;
+      place-items: center;
+      position: relative;
+    }
+    #streamVideo {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #0b0f0d;
+    }
+    .status-float {
+      position: absolute;
+      left: 14px;
+      bottom: 14px;
+      right: 14px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: rgba(10, 15, 12, 0.55);
+      color: #eef8f2;
+      backdrop-filter: blur(10px);
+      font-size: 13px;
+    }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .panel {
+      background: var(--card-2);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 170px 1fr;
+      gap: 8px 10px;
+      align-items: center;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    .value, .badge {
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #fff;
+      border: 1px solid var(--line);
       word-break: break-word;
     }
+    .badge { display: inline-flex; align-items: center; justify-content: center; font-weight: 700; min-width: 72px; }
+    .badge.on { background: #dff8ea; color: #17613a; }
+    .badge.off { background: #eef2ef; color: #5d7066; }
+    .badge.warn { background: #fff1c8; color: #7b5b00; }
+    .toolbar, .controls, .models { display: grid; gap: 10px; }
+    .toolbar { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 12px; }
+    .controls { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 8px; }
+    .models { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 8px; }
+    button {
+      min-height: 48px;
+      padding: 12px 14px;
+      border: 0;
+      border-radius: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      background: #edf4ef;
+      color: var(--text);
+      border: 1px solid var(--line);
+      transition: transform .06s ease, box-shadow .12s ease, background .12s ease;
+    }
+    button:active { transform: translateY(1px); }
+    button.primary { background: linear-gradient(135deg, var(--primary) 0%, #97e4bf 100%); color: #133525; }
+    button.danger { background: linear-gradient(135deg, var(--danger) 0%, #ffadad 100%); color: #4a1010; }
+    button.active { outline: 2px solid #7eddb2; box-shadow: 0 0 0 4px rgba(111, 215, 163, 0.18); }
+    button.wide { grid-column: span 2; }
+    .section-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .muted { color: var(--muted); }
+    .small { font-size: 13px; }
+    .stack { display: grid; gap: 12px; }
     @media (max-width: 980px) {
-      .page { grid-template-columns: 1fr; }
+      main { grid-template-columns: 1fr; }
+      .grid { grid-template-columns: 1fr; }
+      .toolbar, .controls, .models { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 620px) {
+      main { padding: 10px; }
+      .toolbar, .controls, .models { grid-template-columns: 1fr; }
+      .kv { grid-template-columns: 1fr; }
+      .status-float { flex-direction: column; }
     }
   </style>
 </head>
 <body>
-  <main class="page">
-    <section class="card">
-      <div class="team-banner">
-        <h2>Nhóm thực hiện</h2>
-        <ul>
-          <li>Phùng Lê Thanh Quân - MSSV: 23110145</li>
-          <li>Vũ Minh Đức - MSSV: 23110094</li>
-          <li>Đặng Gia Nguyên - MSSV: 23110136</li>
-        </ul>
+  <main>
+    <section class="card stack">
+      <div class="hero">
+        <div class="title">
+          <div>
+            <h1>Trạm thị giác Mecanum</h1>
+            <div class="subtitle">Giao diện điều khiển gọn, sáng, dễ đọc; ưu tiên video mượt, điều khiển nhanh và tiếng Việt chuẩn.</div>
+          </div>
+          <div class="pill" id="connectionPill">Đang kết nối...</div>
+        </div>
       </div>
-
-      <h1>Trạm thị giác Mecanum</h1>
-      <div class="toolbar">
-        <button id="autoToggle" class="primary">Bật Auto</button>
-        <button id="stopBtn" class="danger">Dừng xe</button>
-        <label class="inline"><input id="overlayToggle" type="checkbox"> Bật khung nhận diện</label>
+      <div class="content stack">
+        <div class="toolbar">
+          <button id="autoToggle" class="primary">Bật Auto</button>
+          <button id="stopBtn" class="danger">Dừng xe</button>
+        </div>
+        <div class="video-shell">
+          <video id="streamVideo" autoplay playsinline muted></video>
+          <div class="status-float">
+            <span id="streamStatus">Đang chờ WebRTC...</span>
+            <span id="rtcState">ICE: chưa có</span>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="section-title"><h2>Điều khiển tay</h2><span class="muted small">Giữ-thả tức thời</span></div>
+          <div class="controls">
+            <button data-command="G">Tiến trái</button>
+            <button data-command="F">Tiến</button>
+            <button data-command="H">Tiến phải</button>
+            <button data-command="L">Trái</button>
+            <button data-command="S" class="danger">Dừng</button>
+            <button data-command="R">Phải</button>
+            <button data-command="J">Lùi trái</button>
+            <button data-command="B">Lùi</button>
+            <button data-command="K">Lùi phải</button>
+            <button data-command="Q" class="wide">Xoay trái</button>
+            <button data-command="E">Xoay phải</button>
+          </div>
+        </div>
       </div>
-      <div class="video-box">
-        <img id="streamImage" alt="Video trực tiếp">
-      </div>
-      <p class="muted" id="streamStatus">Đang kết nối video trực tiếp...</p>
     </section>
 
-    <aside class="card">
-      <h2>Trạng thái</h2>
-      <div class="grid">
-        <div>Auto</div><div><span id="autoState" class="badge off">Tắt</span></div>
-        <div>Lệnh hiện tại</div><div class="value" id="commandValue">S</div>
-        <div>Lý do</div><div class="value" id="reasonValue">idle</div>
-        <div>Khoảng cách marker</div><div class="value" id="distanceValue">-</div>
-        <div>Khoảng cách đầu xe</div><div class="value" id="frontDistanceValue">-</div>
-        <div>Telemetry HC-SR04</div><div><span id="telemetryState" class="badge off">Stale</span></div>
-        <div>Guard ESP32</div><div><span id="guardState" class="badge off">OFF</span></div>
-        <div>AI FPS</div><div class="value" id="fpsValue">0.0</div>
-        <div>UDP</div><div class="value" id="udpValue">OK</div>
-        <div>Wi‑Fi</div><div class="value" id="wifiValue">-</div>
-        <div>Model</div><div class="value" id="modelValue">-</div>
+    <aside class="card stack">
+      <div class="hero">
+        <div class="title">
+          <div>
+            <h2>Trạng thái nhanh</h2>
+            <div class="subtitle">Xem những chỉ số quan trọng nhất để biết xe đang mượt hay đang nghến.</div>
+          </div>
+        </div>
       </div>
-
-      <h3 style="margin-top:20px">Debug metrics</h3>
-      <div class="grid">
-        <div>YOLO</div><div class="value" id="yoloMsValue">0 ms</div>
-        <div>ArUco</div><div class="value" id="arucoMsValue">0 ms</div>
-        <div>Pipeline</div><div class="value" id="pipelineMsValue">0 ms</div>
-        <div>Skip frame</div><div class="value" id="skippedFramesValue">0</div>
-        <div>Skip ratio</div><div class="value" id="skipRatioValue">0%</div>
-        <div>Marker seen</div><div class="value" id="markerSeenRatioValue">0%</div>
-        <div>Avg conf</div><div class="value" id="avgConfidenceValue">0%</div>
-        <div>Cmd changes</div><div class="value" id="commandChangesValue">0</div>
+      <div class="content stack">
+        <div class="panel">
+          <div class="kv">
+            <div>Auto</div><div><span id="autoState" class="badge off">Tắt</span></div>
+            <div>Lệnh hiện tại</div><div class="value" id="commandValue">S</div>
+            <div>Lý do</div><div class="value" id="reasonValue">idle</div>
+            <div>Model</div><div class="value" id="modelValue">-</div>
+            <div>Wi‑Fi</div><div class="value" id="wifiValue">-</div>
+            <div>UDP</div><div class="value" id="udpValue">OK</div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="kv">
+            <div>AI FPS</div><div class="value" id="fpsValue">0.0</div>
+            <div>YOLO</div><div class="value" id="yoloMsValue">0 ms</div>
+            <div>ArUco</div><div class="value" id="arucoMsValue">0 ms</div>
+            <div>Pipeline</div><div class="value" id="pipelineMsValue">0 ms</div>
+            <div>Skip frame</div><div class="value" id="skippedFramesValue">0</div>
+            <div>Skip ratio</div><div class="value" id="skipRatioValue">0%</div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="kv">
+            <div>Marker</div><div class="value" id="distanceValue">-</div>
+            <div>Đầu xe</div><div class="value" id="frontDistanceValue">-</div>
+            <div>Telemetry</div><div><span id="telemetryState" class="badge off">Stale</span></div>
+            <div>Guard</div><div><span id="guardState" class="badge off">OFF</span></div>
+            <div>Marker seen</div><div class="value" id="markerSeenRatioValue">0%</div>
+            <div>Avg conf</div><div class="value" id="avgConfidenceValue">0%</div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="section-title"><h3>Chọn model</h3><span class="muted small">Ưu tiên nhanh và ổn định</span></div>
+          <div id="modelButtons" class="models"></div>
+        </div>
       </div>
-
-      <h3 style="margin-top:20px">Điều khiển tay</h3>
-      <div class="controls">
-        <button data-command="G">Tiến trái</button>
-        <button data-command="F">Tiến</button>
-        <button data-command="H">Tiến phải</button>
-        <button data-command="L">Trái</button>
-        <button data-command="S" class="danger">Dừng</button>
-        <button data-command="R">Phải</button>
-        <button data-command="J">Lùi trái</button>
-        <button data-command="B">Lùi</button>
-        <button data-command="K">Lùi phải</button>
-        <button data-command="Q" class="span2">Xoay trái</button>
-        <button data-command="E">Xoay phải</button>
-      </div>
-
-      <h3 style="margin-top:20px">Chọn Model</h3>
-      <div id="modelButtons" class="models"></div>
     </aside>
   </main>
 
@@ -203,9 +264,10 @@
     const els = {
       autoToggle: document.getElementById('autoToggle'),
       stopBtn: document.getElementById('stopBtn'),
-      overlayToggle: document.getElementById('overlayToggle'),
-      streamImage: document.getElementById('streamImage'),
+      streamVideo: document.getElementById('streamVideo'),
       streamStatus: document.getElementById('streamStatus'),
+      rtcState: document.getElementById('rtcState'),
+      connectionPill: document.getElementById('connectionPill'),
       autoState: document.getElementById('autoState'),
       commandValue: document.getElementById('commandValue'),
       reasonValue: document.getElementById('reasonValue'),
@@ -225,13 +287,15 @@
       skipRatioValue: document.getElementById('skipRatioValue'),
       markerSeenRatioValue: document.getElementById('markerSeenRatioValue'),
       avgConfidenceValue: document.getElementById('avgConfidenceValue'),
-      commandChangesValue: document.getElementById('commandChangesValue')
     };
 
     let ws;
     let status = null;
     let currentManual = null;
     let holdTimer = null;
+    let reconnectTimer = null;
+    let pc = null;
+    let mjpegUrl = null;
 
     function setAutoButton(autoEnabled) {
       els.autoToggle.textContent = autoEnabled ? 'Tắt Auto' : 'Bật Auto';
@@ -264,7 +328,6 @@
       els.skipRatioValue.textContent = `${(Number(next.skipRatio || 0) * 100).toFixed(0)}%`;
       els.markerSeenRatioValue.textContent = `${(Number(next.markerSeenRatio || 0) * 100).toFixed(0)}%`;
       els.avgConfidenceValue.textContent = `${(Number(next.avgConfidence || 0) * 100).toFixed(0)}%`;
-      els.commandChangesValue.textContent = String(next.commandChanges || 0);
       setAutoButton(!!next.autonomous);
       renderModelButtons(next);
     }
@@ -283,24 +346,19 @@
     }
 
     async function post(url) {
-      try {
-        await fetch(url, { method: 'POST' });
-      } catch (err) {
-        console.error(err);
-      }
+      try { await fetch(url, { method: 'POST' }); } catch (err) { console.error(err); }
     }
 
     function send(obj) {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(obj));
-      }
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
     }
 
     function startHold(command) {
+      if (currentManual === command) return;
       currentManual = command;
       send({ type: 'manual_press', command });
       clearInterval(holdTimer);
-      holdTimer = setInterval(() => send({ type: 'manual_press', command }), 250);
+      holdTimer = setInterval(() => send({ type: 'manual_press', command }), 180);
     }
 
     function stopHold() {
@@ -322,10 +380,7 @@
         }
         startHold(command);
       };
-      const end = (e) => {
-        e.preventDefault();
-        stopHold();
-      };
+      const end = (e) => { e.preventDefault(); stopHold(); };
       button.addEventListener('mousedown', start);
       button.addEventListener('touchstart', start, { passive: false });
       button.addEventListener('mouseup', end);
@@ -334,43 +389,156 @@
       button.addEventListener('touchcancel', end);
     }
 
+    function setConnection(text, state) {
+      els.connectionPill.textContent = text;
+      els.connectionPill.style.background = state === 'on' ? '#dff8ea' : state === 'warn' ? '#fff1c8' : '#edf9f1';
+      els.connectionPill.style.color = state === 'warn' ? '#7b5b00' : state === 'on' ? '#17613a' : '#2d6148';
+    }
+
+    function scheduleWebRtcRestart(delay = 1500) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) startWebRtc();
+      }, delay);
+    }
+
+    function stopWebRtc() {
+      if (pc) {
+        try { pc.ontrack = null; } catch (_) {}
+        try { pc.onicecandidate = null; } catch (_) {}
+        try { pc.oniceconnectionstatechange = null; } catch (_) {}
+        try { pc.close(); } catch (_) {}
+        pc = null;
+      }
+      els.streamVideo.srcObject = null;
+      els.streamVideo.removeAttribute('src');
+      els.streamVideo.load();
+      mjpegUrl = null;
+    }
+
+    async function startWebRtc() {
+      stopWebRtc();
+      els.rtcState.textContent = 'ICE: ?ang thi?t l?p';
+      els.streamStatus.textContent = '?ang kh?i t?o WebRTC...';
+      pc = new RTCPeerConnection({ iceServers: [] });
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.ontrack = (event) => {
+        if (event.streams && event.streams[0]) {
+          els.streamVideo.srcObject = event.streams[0];
+          els.streamStatus.textContent = '?ang ph?t video tr?c ti?p';
+        }
+      };
+      pc.onicecandidate = (event) => {
+        if (!event.candidate) return;
+        send({
+          type: 'webrtc_ice',
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex
+        });
+      };
+      pc.oniceconnectionstatechange = () => {
+        if (!pc) return;
+        const state = pc.iceConnectionState;
+        els.rtcState.textContent = `ICE: ${state}`;
+        if (state === 'failed' || state === 'disconnected') {
+          els.streamStatus.textContent = 'Video gi?n ?o?n, ?ang th? l?i...';
+          scheduleWebRtcRestart(1500);
+        }
+      };
+      try {
+        const offer = await pc.createOffer({ offerToReceiveVideo: true });
+        await pc.setLocalDescription(offer);
+        send({ type: 'webrtc_offer', sdp: offer.sdp });
+      } catch (err) {
+        console.error(err);
+        els.rtcState.textContent = 'ICE: l?i t?o offer';
+      }
+    }
+
+    async function onRemoteAnswer(sdp) {
+      if (!sdp) return;
+      if (typeof sdp === 'string' && sdp.startsWith('mjpeg:')) {
+        mjpegUrl = sdp.slice('mjpeg:'.length);
+        els.streamVideo.srcObject = null;
+        els.streamVideo.src = mjpegUrl;
+        els.streamVideo.play?.().catch(() => {});
+        els.streamStatus.textContent = '?ang ph?t video MJPEG';
+        els.rtcState.textContent = 'ICE: MJPEG fallback';
+        return;
+      }
+      if (!pc) return;
+      try {
+        await pc.setRemoteDescription({ type: 'answer', sdp });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function onRemoteIce(data) {
+      if (!pc || !data.candidate) return;
+      try {
+        await pc.addIceCandidate({
+          candidate: data.candidate,
+          sdpMid: data.sdpMid,
+          sdpMLineIndex: data.sdpMLineIndex
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
     function connect() {
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       ws = new WebSocket(`${protocol}//${location.host}/ws`);
-      ws.binaryType = 'arraybuffer';
       ws.onopen = () => {
-        els.streamStatus.textContent = 'Đã kết nối video trực tiếp';
-        send({ type: 'overlay', enabled: !!els.overlayToggle.checked });
+        setConnection('Đã kết nối', 'on');
+        els.streamStatus.textContent = 'Sẵn sàng WebRTC';
+        els.rtcState.textContent = 'ICE: đang chờ';
       };
       ws.onclose = () => {
+        setConnection('Mất kết nối', 'warn');
         els.streamStatus.textContent = 'Mất kết nối, đang thử lại...';
+        els.rtcState.textContent = 'ICE: ngắt';
         stopHold();
+        stopWebRtc();
+        clearTimeout(reconnectTimer);
         setTimeout(connect, 1200);
       };
       ws.onerror = () => {
+        setConnection('Lỗi kết nối', 'warn');
         els.streamStatus.textContent = 'Lỗi kết nối WebSocket';
       };
-      ws.onmessage = (event) => {
-        if (typeof event.data === 'string') {
-          const data = JSON.parse(event.data);
-          if (data.type === 'status') renderStatus(data.payload);
+      ws.onmessage = async (event) => {
+        if (typeof event.data !== 'string') return;
+        const data = JSON.parse(event.data);
+        if (data.type === 'status') { renderStatus(data.payload); return; }
+        if (data.type === 'hello') {
+          els.streamStatus.textContent = `Kết nối sẵn sàng (ID: ${data.clientId})`;
+          startWebRtc();
           return;
         }
-        const blob = new Blob([event.data], { type: 'image/jpeg' });
-        const url = URL.createObjectURL(blob);
-        const oldUrl = els.streamImage.dataset.url;
-        els.streamImage.src = url;
-        els.streamImage.dataset.url = url;
-        if (oldUrl) URL.revokeObjectURL(oldUrl);
+        if (data.type === 'webrtc_answer') { await onRemoteAnswer(data.sdp); return; }
+        if (data.type === 'webrtc_ice') { await onRemoteIce(data); return; }
+        if (data.type === 'rtc_state') { els.rtcState.textContent = `ICE: ${data.value || 'unknown'}`; }
       };
     }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) stopHold();
+    });
+    window.addEventListener('blur', () => stopHold());
+    window.addEventListener('beforeunload', () => {
+      stopHold();
+      stopWebRtc();
+      try { ws && ws.close(); } catch (_) {}
+    });
 
     els.autoToggle.addEventListener('click', () => {
       if (!status || !status.autonomous) post('/api/auto/on');
       else post('/api/auto/off');
     });
     els.stopBtn.addEventListener('click', () => post('/api/stop'));
-    els.overlayToggle.addEventListener('change', () => send({ type: 'overlay', enabled: !!els.overlayToggle.checked }));
     document.querySelectorAll('[data-command]').forEach(attachManual);
     connect();
   </script>

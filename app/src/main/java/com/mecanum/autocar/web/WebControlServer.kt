@@ -1,13 +1,10 @@
 package com.mecanum.autocar.web
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.util.Log
-import com.mecanum.autocar.ai.VisionResult
 import com.mecanum.autocar.control.StationController
 import fi.iki.elonen.NanoHTTPD
 import fi.iki.elonen.NanoWSD
-import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -16,7 +13,7 @@ import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Trang thai gui ra dashboard. Tat ca cac truong duoc serialize sang JSON UTF-8.
+ * Trang thai gui ra dashboard. Tat ca truong hien thi duoc serialize UTF-8.
  */
 data class StationStatus(
     val autonomous: Boolean,
@@ -53,63 +50,36 @@ class WebControlServer(
     private val onAutoOff: () -> Unit,
     private val onStopVehicle: () -> Unit,
     private val onModelSelect: (String) -> Unit,
-    private val targetStreamFps: Int = 8,
-    private val jpegQuality: Int = 58,
+    private val onWebRtcSignal: (clientId: String, message: String) -> Unit = { _, _ -> },
     private val maxClients: Int = 4,
 ) : NanoWSD(port) {
 
     private val clients = CopyOnWriteArraySet<DashboardSocket>()
+    @Volatile private var latestMjpegFrameProvider: (() -> ByteArray?)? = null
+    @Volatile private var mjpegVersionProvider: (() -> Long)? = null
     private val clientIds = AtomicInteger(0)
-    private val frameLock = Any()
-    private var latestRaw: Bitmap? = null
-    private var latestResult: VisionResult? = null
-    private var frameDirty = false
     private var cachedStatusJson: String = "{}"
 
-    @Volatile private var streaming = false
-    private var streamThread: Thread? = null
+    @Volatile private var running = false
     private var statusThread: Thread? = null
 
     val url: String
         get() = "http://${localIpv4Address() ?: "0.0.0.0"}:$port"
 
     fun startServer() {
-        if (streaming) return
-        streaming = true
+        if (running) return
+        running = true
         cachedStatusJson = buildStatusJson(statusProvider())
         start(SOCKET_READ_TIMEOUT, false)
-        streamThread = Thread(::streamLoop, "web-stream").also { it.isDaemon = true; it.start() }
         statusThread = Thread(::statusLoop, "web-status").also { it.isDaemon = true; it.start() }
     }
 
     fun stopServer() {
-        streaming = false
-        try {
-            stop()
-        } catch (_: Exception) {
-        }
+        running = false
+        statusThread?.interrupt()
+        statusThread = null
+        try { stop() } catch (_: Exception) {}
         clients.clear()
-        synchronized(frameLock) {
-            latestRaw?.recycle()
-            latestRaw = null
-            latestResult = null
-            frameDirty = false
-        }
-    }
-
-    private fun hasViewers(): Boolean = clients.isNotEmpty()
-
-    fun submitFrame(bitmap: Bitmap, result: VisionResult) {
-        if (!streaming || !hasViewers()) return
-        val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false) ?: return
-        synchronized(frameLock) {
-            latestRaw?.recycle()
-            latestRaw = Bitmap.createScaledBitmap(copy, 480, 360, true).also {
-                if (it !== copy) copy.recycle()
-            }
-            latestResult = result
-            frameDirty = true
-        }
     }
 
     override fun openWebSocket(handshake: IHTTPSession): WebSocket = DashboardSocket(handshake)
@@ -119,6 +89,7 @@ class WebControlServer(
         return try {
             when {
                 uri == "/" || uri == "/index.html" -> serveDashboard()
+                uri.startsWith("/stream.mjpeg") -> serveMjpeg(session)
                 uri == "/status.json" -> jsonResponse(buildStatusJson(statusProvider()))
                 uri.startsWith("/api/auto/on") -> { onAutoOn(); okResponse() }
                 uri.startsWith("/api/auto/off") -> { onAutoOff(); okResponse() }
@@ -136,6 +107,59 @@ class WebControlServer(
         }
     }
 
+
+    fun setMjpegProvider(latestFrameProvider: () -> ByteArray?, versionProvider: () -> Long) {
+        latestMjpegFrameProvider = latestFrameProvider
+        mjpegVersionProvider = versionProvider
+    }
+
+    fun sendWebRtcSignal(clientId: String, message: String) {
+        clients.firstOrNull { it.id == clientId }?.sendText(message)
+    }
+
+
+    private fun serveMjpeg(session: IHTTPSession): Response {
+        val provider = latestMjpegFrameProvider
+        if (provider == null) {
+            return newFixedLengthResponse(Response.Status.SERVICE_UNAVAILABLE, MIME_PLAINTEXT, "stream unavailable")
+        }
+        val boundary = "frame"
+        val stream = object : java.io.PipedInputStream(256 * 1024) {}
+        val output = java.io.PipedOutputStream(stream)
+        Thread({
+            var lastVersion = -1L
+            try {
+                while (!Thread.currentThread().isInterrupted) {
+                    val version = mjpegVersionProvider?.invoke() ?: 0L
+                    val frame = provider.invoke()
+                    if (frame != null && version != lastVersion) {
+                        output.write(("--" + boundary + "\r\n").toByteArray(Charsets.US_ASCII))
+                        output.write("Content-Type: image/jpeg\r\n".toByteArray(Charsets.US_ASCII))
+                        output.write(("Content-Length: " + frame.size + "\r\n\r\n").toByteArray(Charsets.US_ASCII))
+                        output.write(frame)
+                        output.write("\r\n".toByteArray(Charsets.US_ASCII))
+                        output.flush()
+                        lastVersion = version
+                    }
+                    Thread.sleep(80L)
+                }
+            } catch (_: Exception) {
+            } finally {
+                try { output.close() } catch (_: Exception) {}
+            }
+        }, "mjpeg-stream").also { it.isDaemon = true; it.start() }
+
+        return NanoHTTPD.newChunkedResponse(
+            Response.Status.OK,
+            "multipart/x-mixed-replace; boundary=" + boundary,
+            stream,
+        ).apply {
+            addHeader("Cache-Control", "no-store")
+            addHeader("Pragma", "no-cache")
+            addHeader("Connection", "close")
+        }
+    }
+
     private fun serveDashboard(): Response {
         val html = context.assets.open("dashboard.html").bufferedReader(Charsets.UTF_8).use { it.readText() }
         return newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html)
@@ -149,59 +173,10 @@ class WebControlServer(
         return response
     }
 
-    private fun streamLoop() {
-        val frameIntervalMs = (1000L / targetStreamFps.coerceIn(1, 30)).coerceAtLeast(1L)
-        while (streaming) {
-            val start = System.currentTimeMillis()
-            try { broadcastFrame() } catch (error: Exception) { Log.w(TAG, "stream error", error) }
-            val elapsed = System.currentTimeMillis() - start
-            val sleep = frameIntervalMs - elapsed
-            if (sleep > 0) Thread.sleep(sleep)
-        }
-    }
-
-    private fun broadcastFrame() {
-        if (!hasViewers()) return
-        val raw: Bitmap
-        val result: VisionResult?
-        synchronized(frameLock) {
-            if (!frameDirty || latestRaw == null) return
-            raw = latestRaw ?: return
-            result = latestResult
-            latestRaw = null
-            latestResult = null
-            frameDirty = false
-        }
-
-        val wantOverlay = clients.any { it.overlayEnabled }
-        val wantPlain = clients.any { !it.overlayEnabled }
-
-        var overlayJpeg: ByteArray? = null
-        var plainJpeg: ByteArray? = null
-        if (wantOverlay) {
-            val rendered = FrameOverlayRenderer.render(raw, result)
-            overlayJpeg = encodeJpeg(rendered)
-            rendered.recycle()
-        }
-        if (wantPlain) plainJpeg = encodeJpeg(raw)
-        raw.recycle()
-
-        for (client in clients) {
-            val payload = if (client.overlayEnabled) overlayJpeg else plainJpeg
-            if (payload != null) client.sendFrame(payload)
-        }
-    }
-
-    private fun encodeJpeg(bitmap: Bitmap): ByteArray {
-        val out = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
-        return out.toByteArray()
-    }
-
     private fun statusLoop() {
-        while (streaming) {
+        while (running) {
             try {
-                if (hasViewers()) {
+                if (clients.isNotEmpty()) {
                     cachedStatusJson = buildStatusJson(statusProvider())
                     val json = "{\"type\":\"status\",\"payload\":" + cachedStatusJson + "}"
                     for (client in clients) client.sendText(json)
@@ -209,7 +184,11 @@ class WebControlServer(
             } catch (error: Exception) {
                 Log.w(TAG, "status error", error)
             }
-            Thread.sleep(200L)
+            try {
+                Thread.sleep(200L)
+            } catch (_: InterruptedException) {
+                break
+            }
         }
     }
 
@@ -249,7 +228,6 @@ class WebControlServer(
 
     inner class DashboardSocket(handshake: IHTTPSession) : WebSocket(handshake) {
         val id: String = "client-${clientIds.incrementAndGet()}"
-        @Volatile var overlayEnabled: Boolean = false
 
         override fun onOpen() {
             if (clients.size >= maxClients) {
@@ -257,15 +235,15 @@ class WebControlServer(
                 return
             }
             clients.add(this)
-            try {
-                cachedStatusJson = buildStatusJson(statusProvider())
-                sendText("{\"type\":\"status\",\"payload\":" + cachedStatusJson + "}")
-            } catch (_: Exception) {}
+            sendText("{\"type\":\"hello\",\"clientId\":\"$id\"}")
+            cachedStatusJson = buildStatusJson(statusProvider())
+            sendText("{\"type\":\"status\",\"payload\":" + cachedStatusJson + "}")
         }
 
         override fun onClose(code: WebSocketFrame.CloseCode?, reason: String?, initiatedByRemote: Boolean) {
             clients.remove(this)
             controller.releaseManual(id)
+            onWebRtcSignal(id, "{\"type\":\"webrtc_disconnect\"}")
         }
 
         override fun onMessage(message: WebSocketFrame) {
@@ -275,10 +253,6 @@ class WebControlServer(
 
         override fun onPong(pong: WebSocketFrame) {}
         override fun onException(exception: IOException) { Log.w(TAG, "ws exception", exception) }
-
-        fun sendFrame(bytes: ByteArray) {
-            try { send(bytes) } catch (_: Exception) { clients.remove(this) }
-        }
 
         fun sendText(text: String) {
             try { send(text) } catch (_: Exception) { clients.remove(this) }
@@ -297,7 +271,7 @@ class WebControlServer(
                 controller.releaseManual(socket.id)
                 cachedStatusJson = buildStatusJson(statusProvider())
             }
-            "overlay" -> socket.overlayEnabled = text.contains("\"enabled\":true")
+            "webrtc_offer", "webrtc_answer", "webrtc_ice" -> onWebRtcSignal(socket.id, text)
         }
     }
 
