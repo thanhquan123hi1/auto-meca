@@ -8,8 +8,8 @@ import kotlin.math.max
 class DecisionEngine(
     private val obstacleMinAreaRatio: Float = 0.022f,
     private val obstacleStrongAreaRatio: Float = 0.095f,
-    private val obstacleCenterLeftBound: Float = 0.35f,
-    private val obstacleCenterRightBound: Float = 0.65f,
+    private val obstacleCenterLeftBound: Float = 0.26f,
+    private val obstacleCenterRightBound: Float = 0.74f,
     private val obstacleAvoidDistanceCm: Float = 30f,
     private val obstacleEmergencyDistanceCm: Float = 12f,
     private val markerOcclusionGraceMs: Long = 3200L,
@@ -181,9 +181,9 @@ class DecisionEngine(
         }
 
         val smoothed = smoothRisks(rawRisks)
-        val leftRisk = smoothed[0] * 1.15f + smoothed[1]
+        val leftRisk = smoothed[0] * 0.55f + smoothed[1] * 1.35f
         val centerRisk = smoothed[2]
-        val rightRisk = smoothed[4] * 1.15f + smoothed[3]
+        val rightRisk = smoothed[4] * 0.55f + smoothed[3] * 1.35f
         val centerBlocked = centerRisk >= centerBlockedThreshold ||
             (frontDistanceCm != null && frontDistanceCm <= obstacleAvoidDistanceCm)
         val dangerScore = max(max(leftRisk, centerRisk), rightRisk)
@@ -216,7 +216,11 @@ class DecisionEngine(
         val centerXNorm = (detection.centerX / frameWidth.toFloat()).coerceIn(0f, 1f)
         val centerYNorm = (detection.box.centerY() / frameHeight.toFloat()).coerceIn(0f, 1f)
         val bottomNorm = (detection.box.bottom / frameHeight.toFloat()).coerceIn(0f, 1f)
-        val laneBias = (1f - (abs(centerXNorm - 0.5f) / 0.5f)).coerceIn(0f, 1f)
+        val laneBias = when {
+            centerXNorm < 0.10f || centerXNorm > 0.90f -> 0.20f
+            centerXNorm < obstacleCenterLeftBound || centerXNorm > obstacleCenterRightBound -> 0.88f
+            else -> 1f
+        }
         val bottomWeight = ((bottomNorm - 0.28f) / 0.72f).coerceIn(0f, 1.35f)
         val roiWeight = when {
             centerYNorm > 0.58f -> 1f
